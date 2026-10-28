@@ -235,6 +235,32 @@ void TciApplet::buildUI()
         QSignalBlocker b(m_tciEnable);
         m_tciEnable->setChecked(tciAutoStart);
     }
+
+    // EXPERIMENT (kurt-experiments): RX via AetherRX, see TciServer::setRxViaAetherRx.
+    m_rxViaAetherRx = new QPushButton("DSP");
+    m_rxViaAetherRx->setCheckable(true);
+    m_rxViaAetherRx->setObjectName(QStringLiteral("tciRxViaAetherRx"));
+    m_rxViaAetherRx->setAccessibleName(tr("TCI RX via AetherRX"));
+    m_rxViaAetherRx->setToolTip(tr("Experimental: send the AetherRX-processed audio "
+                                   "(NR, EQ, gate, comp) to TCI instead of the raw slice audio"));
+    m_rxViaAetherRx->setStyleSheet(kGreenToggle);
+    m_rxViaAetherRx->setFixedSize(40, 22);
+    {
+        QSignalBlocker b(m_rxViaAetherRx);
+        m_rxViaAetherRx->setChecked(
+            settings.value("TciRxViaAetherRx", "False").toString() == "True");
+    }
+    enableRow->addWidget(m_rxViaAetherRx);
+    connect(m_rxViaAetherRx, &QPushButton::toggled, this, [this](bool on) {
+        if (m_tciServer) {
+            m_tciServer->setRxViaAetherRx(on);
+        } else {
+            auto& ss = AppSettings::instance();
+            ss.setValue("TciRxViaAetherRx", on ? "True" : "False");
+            ss.save();
+        }
+    });
+
     enableRow->addWidget(m_tciEnable);
 
     outer->addLayout(enableRow);
