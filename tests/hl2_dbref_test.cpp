@@ -177,7 +177,8 @@ int main()
     check(near(agc.agcCeilingDb(kDefaultThresholdUnits), 39.0),
           "at the reference gain the default AGC-T is still 39 dB");
     check(near(agc.agcCeilingDb(0), 0.0), "AGC-T 0 is still 0 dB");
-    check(near(agc.agcCeilingDb(100), 60.0), "AGC-T 100 is still 60 dB");
+    check(near(agc.agcCeilingDb(100), 90.0), "AGC-T 100 reaches 90 dB (kurt-experiments)");
+    check(near(agc.agcCeilingDb(50), 30.0), "below the knee the 0.6 map is untouched");
 
     // A gain change moves the ceiling by exactly minus the gain change, so a
     // constant antenna signal keeps a constant heard level.
@@ -217,8 +218,10 @@ int main()
     // overrun: an operator 12 dB down on the LNA needs 12 dB more AGC gain to
     // hear the same signal at the same level.
     agc.setLnaGainDb(-12.0);                            // the AD9866 floor, real
-    check(near(agc.agcCeilingDb(100), 60.0 + 32.0),
-          "a 32 dB LNA cut refers AGC-T 100 above the slider's nominal top");
+    check(near(agc.agcCeilingDb(65), 39.0 + 32.0),
+          "a 32 dB LNA cut refers AGC-T 65 above the slider's nominal top");
+    check(near(agc.agcCeilingDb(100), Hl2DbReference::kAgcCeilingDbMax),
+          "90 + 32 dB at AGC-T 100 saturates at WDSP's maximum");
     check(agc.agcCeilingDb(100) <= Hl2DbReference::kAgcCeilingDbMax,
           "the referred ceiling stays inside WDSP's own maximum");
 
