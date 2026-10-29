@@ -29,6 +29,23 @@ public:
     // Hl2Backend::setSliceAgc).
     static constexpr double kAgcCeilingDbPerUnit = 0.6;
 
+    // EXPERIMENT (kurt-experiments, not for upstream): above the default 65
+    // the map steepens so AGC-T 100 reaches Thetis's 90 dB. 0..65 is untouched,
+    // so the default still lands at 39 dB; past it is where the clipping
+    // measured above may come back, which is what this is here to hear.
+    static constexpr int kAgcKneeUnits = 65;
+    static constexpr double kAgcCeilingDbAtTop = 90.0;
+
+    static constexpr double nominalAgcCeilingDb(int thresholdUnits) noexcept
+    {
+        const double kneeDb = kAgcKneeUnits * kAgcCeilingDbPerUnit;
+        if (thresholdUnits <= kAgcKneeUnits) {
+            return thresholdUnits * kAgcCeilingDbPerUnit;
+        }
+        return kneeDb + (thresholdUnits - kAgcKneeUnits)
+            * (kAgcCeilingDbAtTop - kneeDb) / (100 - kAgcKneeUnits);
+    }
+
     // 0 dBFS at the antenna with 0 dB LNA gain, derived (not averaged):
     //   full scale at RxPGA = 48 dB (datasheet)      8.0 mVpp
     //   referred to 0 dB (x251.2)                    2.01 Vpp diff = 0.707 Vrms
@@ -119,7 +136,7 @@ public:
     // existed.
     double agcCeilingDb(int thresholdUnits) const noexcept
     {
-        const double base = static_cast<double>(thresholdUnits) * kAgcCeilingDbPerUnit;
+        const double base = nominalAgcCeilingDb(thresholdUnits);
         return std::clamp(base + lnaOffsetDb(), 0.0, kAgcCeilingDbMax);
     }
 

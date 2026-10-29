@@ -151,6 +151,14 @@ public:
     void setRxChannelGain(int channel, float gain);
     float rxChannelGain(int channel) const;
 
+    // EXPERIMENT (kurt-experiments, not for upstream): feed the TCI receiver
+    // of the focused slice from the post-AetherRX speaker mix (NR, EQ, gate,
+    // comp...) instead of the raw per-slice tap. Falls back to the raw tap
+    // whenever the mix stops arriving (PC audio off, TX, device rate other
+    // than 24/48 kHz). Persists to TciRxViaAetherRx.
+    void setRxViaAetherRx(bool on);
+    bool rxViaAetherRx() const { return m_rxViaAetherRx; }
+
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
     void wireSpotModel();
@@ -393,6 +401,18 @@ private:
 
     QPointer<RadioModel> m_model;  // QPointer auto-clears when RadioModel is destroyed (#2385)
     AudioEngine*      m_audio{nullptr};
+    // RX via AetherRX experiment; see setRxViaAetherRx().
+    void rewireAetherRx();
+    void onAetherRxAudio(const QString& source, const QString& sourceId,
+                         const QByteArray& pcmFloat, int sampleRate, int channels);
+    int aetherRxTargetSlice() const;
+    bool aetherRxLive() const;
+    bool              m_rxViaAetherRx{false};
+    QMetaObject::Connection m_aetherRxConn;
+    PcmProducer       m_aetherRxProducer;
+    int               m_aetherRxSlice{-1};
+    int               m_aetherRxRate{0};
+    QElapsedTimer     m_aetherRxLastFrame;
     std::atomic<bool>    m_running{false};
     std::atomic<quint16> m_boundPort{0};
     std::atomic<int>     m_clientCount{0};
