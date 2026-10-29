@@ -68,6 +68,9 @@ public:
     void setRxBindings(const QHash<quint64, TciRxBinding>& bindings);
     void receivePcm(quint64 key, const PcmFrame& frame);
     void retireRxRoute(quint64 key);
+    // EXPERIMENT (kurt-experiments): drop the route's stream pin so the next
+    // frame of any stream takes the route over (RX via AetherRX handover).
+    void releaseRxRoute(quint64 key);
     void setRxGain(int channel, float gain);
     void setTxGain(float gain, int overflowMode);
     void prepareTx(quint64 id, const TxCoordinator::Context& context);

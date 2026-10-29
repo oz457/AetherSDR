@@ -2831,17 +2831,21 @@ void TciServer::onAetherRxAudio(const QString& source, const QString& sourceId,
 
     // A new session whenever the target, the rate or the raw fallback came in
     // between, so the worker sees a stream change rather than a sample gap.
+    const quint64 key = TciIoWorker::rxRouteKey(false, slice);
     if (slice != m_aetherRxSlice || sampleRate != m_aetherRxRate || !aetherRxLive()) {
         if (!m_aetherRxProducer.start(PcmPurpose::Slice, slice, format)) return;
         m_aetherRxSlice = slice;
         m_aetherRxRate = sampleRate;
+        // The worker pins a route to the stream that holds it and refuses any
+        // other while that one is current; the raw tap's producer stays
+        // current, so the pin must be let go before our first frame.
+        m_io->post([io = m_io.get(), key] { io->releaseRxRoute(key); });
     }
     QVector<float> samples(pcmFloat.size() / static_cast<qsizetype>(sizeof(float)));
     std::memcpy(samples.data(), pcmFloat.constData(), static_cast<std::size_t>(pcmFloat.size()));
     auto frame = m_aetherRxProducer.produce(std::move(samples));
     if (!frame) return;
     m_aetherRxLastFrame.start();
-    const quint64 key = TciIoWorker::rxRouteKey(false, slice);
     m_io->post([io = m_io.get(), key, f = *frame] { io->receivePcm(key, f); },
                frame->samples().size() * sizeof(float));
 }
@@ -2948,7 +2952,14 @@ void TciServer::retireSliceRx(int sliceId)
 void TciServer::onSlicePcmReady(int sliceId, const PcmFrame& frame)
 {
     // RX via AetherRX experiment: the processed mix owns this slice's route.
-    if (m_rxViaAetherRx && sliceId == m_aetherRxSlice && aetherRxLive()) return;
+    if (m_rxViaAetherRx && sliceId == m_aetherRxSlice) {
+        if (aetherRxLive()) return;
+        // The mix stopped: end its stream so the pin it holds lapses and the
+        // raw tap's next frame can take the route back.
+        m_aetherRxProducer.invalidate();
+        m_aetherRxSlice = -1;
+        m_aetherRxRate = 0;
+    }
     const quint64 key = TciIoWorker::rxRouteKey(false, sliceId);
     m_io->post([io = m_io.get(), key, frame] { io->receivePcm(key, frame); },
                frame.samples().size() * sizeof(float));

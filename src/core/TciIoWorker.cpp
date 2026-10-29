@@ -400,6 +400,12 @@ void TciIoWorker::resetRxRoute(quint64 key)
     for (RxClient& client : m_rxClients) { client.converters.remove(key); }
 }
 
+void TciIoWorker::releaseRxRoute(quint64 key)
+{
+    resetRxRoute(key);
+    m_rxRoutes.remove(key);
+}
+
 bool TciIoWorker::rxDeliveryCurrent(quint64 id, quint64 generation, quint64 key,
     const PcmFrame& input, const std::shared_ptr<TciRxConverter>& converter) const
 {
