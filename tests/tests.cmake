@@ -6889,6 +6889,13 @@ target_link_libraries(hl2_bandstack_digital_agc_test PRIVATE
     aethercore Qt6::Core Qt6::Network)
 add_test(NAME hl2_bandstack_digital_agc_test COMMAND hl2_bandstack_digital_agc_test)
 
+# TCI sql_level in the spec form (trx,dB). Injected stub backend,
+# TciProtocol fed command text. Socket-free, nothing keyed.
+add_executable(tci_sql_level_test tests/tci_sql_level_test.cpp)
+target_include_directories(tci_sql_level_test PRIVATE src tests)
+target_link_libraries(tci_sql_level_test PRIVATE aethercore Qt6::Core Qt6::Network)
+add_test(NAME tci_sql_level_test COMMAND tci_sql_level_test)
+
 # #5774: socket-free rigctl `L RF` / `l RF`. An injected backend records the pan
 # RF gain it is handed; the pan is materialised through the seam's geometry
 # signal. Nothing is bound, opened or keyed.
@@ -9908,6 +9915,7 @@ set(AETHER_SETTINGS_CONSUMERS
     cat_freedv_mode_tokens_test
     tci_rx_volume_test
     hl2_bandstack_digital_agc_test
+    tci_sql_level_test
     radio_model_client_state_test
     pan_control_routing_test
     squelch_level_scale_test
