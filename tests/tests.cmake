@@ -4792,6 +4792,16 @@ target_link_libraries(update_installer_test PRIVATE aethercore Qt6::Core Qt6::Te
 set_target_properties(update_installer_test PROPERTIES AUTOMOC ON)
 add_test(NAME update_installer_test COMMAND update_installer_test)
 
+# LinuxInstall (RFC #5304 Phase 5): what --install makes (the release copied,
+# current, the menu entry, icon and command), the switch to a staged release
+# with its self-test and cleanup, and the relaunch after exit. Temporary
+# folders only. Skips on Windows.
+add_executable(linux_install_test tests/linux_install_test.cpp)
+target_include_directories(linux_install_test PRIVATE src tests)
+target_link_libraries(linux_install_test PRIVATE aethercore Qt6::Core Qt6::Test)
+set_target_properties(linux_install_test PROPERTIES AUTOMOC ON)
+add_test(NAME linux_install_test COMMAND linux_install_test)
+
 # AetherSDRUpdater's folder swap (RFC #5304 Phase 3): UpdateSwap's state
 # machine on a simulated clock with injected processes and rename failures,
 # on every platform; the Win32 entry point is a thin shell over it. No Qt.
@@ -5730,7 +5740,7 @@ add_test(NAME kat500_meter_source_test COMMAND kat500_meter_source_test)
 add_executable(s_meter_geometry_test
     tests/s_meter_geometry_test.cpp
     src/gui/AnalogMeterFaceTheme.cpp
-    src/gui/RadioSwrValidityFilter.cpp
+    src/models/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/core/ThemeManager.cpp
@@ -7099,6 +7109,12 @@ target_include_directories(panadapter_dbm_range_test PRIVATE src)
 target_link_libraries(panadapter_dbm_range_test PRIVATE aethercore Qt6::Core)
 set_target_properties(panadapter_dbm_range_test PROPERTIES AUTOMOC ON)
 add_test(NAME panadapter_dbm_range_test COMMAND panadapter_dbm_range_test)
+
+add_executable(panadapter_late_packet_test tests/panadapter_late_packet_test.cpp)
+target_include_directories(panadapter_late_packet_test PRIVATE src)
+target_link_libraries(panadapter_late_packet_test PRIVATE aethercore Qt6::Core)
+set_target_properties(panadapter_late_packet_test PROPERTIES AUTOMOC ON)
+add_test(NAME panadapter_late_packet_test COMMAND panadapter_late_packet_test)
 
 # wirePanadapter() can see the placeholder SpectrumWidget more than once. The
 # helper keeps one timer/path per widget while retaining separate per-pan timers.
@@ -10031,6 +10047,7 @@ set(AETHER_SETTINGS_CONSUMERS
     wfm_controls_test
     spectrum_confirmed_geometry_test
     panadapter_dbm_range_test
+    panadapter_late_packet_test
     flex_slice_mode_intent_test
     rtl_slice_settings_test
     rtl_device_settings_test

@@ -1155,6 +1155,7 @@ set(CORE_SOURCES
     src/core/UpdateStager.cpp
     src/core/UpdateInstaller.cpp
     src/core/UpdateController.cpp
+    src/core/LinuxInstall.cpp
     src/core/NetworkDiagnostics.cpp
     src/core/WindowsFirewall.cpp
     src/core/OleCompoundFile.cpp
@@ -1247,6 +1248,7 @@ if(WIN32)
 endif()
 
 set(MODEL_SOURCES
+    src/models/RadioSwrValidityFilter.cpp
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
@@ -1459,7 +1461,6 @@ set(GUI_SOURCES
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
-    src/gui/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
