@@ -272,6 +272,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                 this, [this](int) { m_drivePending = true; queuePowerBroadcast(); });
         connect(&m_model->transmitModel(), &TransmitModel::tunePowerChanged,
                 this, [this](int) { m_tuneDrivePending = true; queuePowerBroadcast(); });
+        // TX passband → `tx_filter_band_ex:` broadcast, whoever moved it: a
+        // TCI client's SET, the Phone applet, or a TX profile. This is also
+        // the reply to a client's SET (see TciProtocol::cmdTxFilterBandEx).
+        connect(&m_model->transmitModel(), &TransmitModel::txFilterCutoffChanged,
+                this, [this](int lowHz, int highHz) {
+            if (m_clients.isEmpty()) return;
+            broadcast(QStringLiteral("tx_filter_band_ex:%1,%2;")
+                          .arg(lowHz).arg(highHz));
+        });
 
         // `tune:` follows the model whatever started the tune: the TX applet,
         // a TCI client, or the radio's own status (#3327).

@@ -417,6 +417,10 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("drive:%1,%2;").arg(txTrxIndex).arg(tx.rfPower());
         burst += QStringLiteral("tune_drive:%1,%2;").arg(txTrxIndex).arg(tx.tunePower());
         burst += QStringLiteral("mic_level:%1;").arg(tx.micLevel());
+        // TX passband, so a client seeds its TX filter control from the
+        // radio instead of assuming one (Thetis sends it in its burst too).
+        burst += QStringLiteral("tx_filter_band_ex:%1,%2;")
+                     .arg(tx.txFilterLow()).arg(tx.txFilterHigh());
         burst += QStringLiteral("trx:%1,%2;").arg(txTrxIndex).arg(isTx ? "true" : "false");
         burst += QStringLiteral("tune:%1,%2;").arg(txTrxIndex).arg(tx.isTuning() ? "true" : "false");
 
@@ -560,6 +564,7 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "xit_offset")       return cmdXitOffset(args, isSet);
     if (name == "split_enable")     return cmdSplitEnable(args, isSet);
     if (name == "rx_filter_band")   return cmdRxFilterBand(args, isSet);
+    if (name == "tx_filter_band_ex") return cmdTxFilterBandEx(args);
     if (name == "cw_macros_speed")  return cmdCwMacrosSpeed(args, isSet);
     if (name == "lock")             return cmdLock(args, isSet);
     if (name == "sql_enable")       return cmdSqlEnable(args, isSet);
@@ -886,6 +891,40 @@ QString TciProtocol::cmdTxGain(const QStringList& args, bool /*isSet*/)
     const int pct = qBound(0, raw, 100);
     m_pendingTxGain = pct;
     m_pendingNotification = QStringLiteral("tx_gain:%1;").arg(pct);
+    return {};
+}
+
+// ── TX_FILTER_BAND_EX: get/set the TX passband (Thetis extension) ──────────
+
+// tx_filter_band_ex:low,high — the TX audio passband in positive Hz, the
+// sideband following the mode, exactly as Thetis' TCIServer defines it. Thetis
+// clients (TCI Remote among them) set the TX filter with nothing else, so
+// without this the passband stays wherever the GUI last left it.
+// The SET is normalised the way Thetis normalises it (absolute values, low and
+// high swapped if reversed, at least 100 Hz wide) and then handed to
+// TransmitModel::setTxFilter(), which clamps to its own range. There is no
+// direct reply: TciServer broadcasts the passband the model actually adopted
+// on txFilterCutoffChanged, so a clamped request reads back as clamped, and an
+// unchanged one stays quiet, as in Thetis.
+QString TciProtocol::cmdTxFilterBandEx(const QStringList& args)
+{
+    if (!m_model) return {};
+    if (args.isEmpty() || (args.size() == 1 && args.first().isEmpty())) {
+        const auto& tx = m_model->transmitModel();
+        return QStringLiteral("tx_filter_band_ex:%1,%2;")
+                   .arg(tx.txFilterLow()).arg(tx.txFilterHigh());
+    }
+    if (args.size() != 2) return {};
+    int low = 0;
+    int high = 0;
+    if (!argToInt(args, 0, low) || !argToInt(args, 1, high)) return {};
+    low = std::abs(low);
+    high = std::abs(high);
+    if (low > high) std::swap(low, high);
+    if (high < low + 100) high = low + 100;
+    QMetaObject::invokeMethod(m_model, [model = m_model, low, high]() {
+        model->transmitModel().setTxFilter(low, high);
+    }, Qt::QueuedConnection);
     return {};
 }
 
