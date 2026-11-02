@@ -346,7 +346,10 @@ qint64 TciIoWorker::sendStreamFrame(quint64 id, const QByteArray& message)
     if (it == m_clients.end() || !it->socket || !it->lifetime->live.load()) { return -1; }
     const qint64 pending = it->socket->bytesToWrite();
     if (pending > kMaxRxBacklogBytes / 2 - message.size()) {
-        if (it->droppedStreamFrames++ % 500 == 0) {
+        ++it->droppedStreamFrames;
+        // Logged by time, not by count: the frame cadence depends on the rate.
+        if (!it->streamDropLog.isValid() || it->streamDropLog.elapsed() >= kStreamDropLogMs) {
+            it->streamDropLog.start();
             qCWarning(lcCat) << "TCI: IQ frame dropped, socket behind: client=" << id
                              << "pending_bytes=" << pending << "dropped=" << it->droppedStreamFrames;
         }
@@ -422,12 +425,6 @@ void TciIoWorker::retireRxRoute(quint64 key)
 void TciIoWorker::resetRxRoute(quint64 key)
 {
     for (RxClient& client : m_rxClients) { client.converters.remove(key); }
-}
-
-void TciIoWorker::releaseRxRoute(quint64 key)
-{
-    resetRxRoute(key);
-    m_rxRoutes.remove(key);
 }
 
 bool TciIoWorker::rxDeliveryCurrent(quint64 id, quint64 generation, quint64 key,

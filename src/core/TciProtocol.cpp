@@ -183,10 +183,10 @@ static bool argToDouble(const QStringList& args, int idx, double& out)
     return true;
 }
 
-// SQL_LEVEL is a threshold in dB, -140..0, per TCI v2.0. A slice stores a
+// SQL_LEVEL is a threshold in dB, -140..0 (TCI 2.1 p.31). A slice stores a
 // 0..100 level; the backend's published squelch scale converts between the
-// two, and a backend that publishes none for the slice's mode keeps Flex's
-// -160 + level map, as the panadapter's SQL line does.
+// two. Where the backend publishes no dB place for the slice's mode (HL2 FM,
+// RTL, a Kiwi source), Flex's -160 + level map stands in as a nominal scale.
 static constexpr double kSqlMinDb = -140.0;
 
 static SquelchLevelScale sqlScaleFor(RadioModel* model, SliceModel* s)
@@ -1306,11 +1306,16 @@ QString TciProtocol::cmdSqlLevel(const QStringList& args, bool isSet)
     if (args.size() < 2) return {};
     double value = 0.0;
     if (!argToDouble(args, 1, value)) return {};
-    // Positive values cannot be spec dB, so they are the 0..100 level older
-    // builds took.
-    const int level = (value > 0.0)
-        ? std::min(static_cast<int>(std::lround(value)), 100)
-        : sqlScaleFor(m_model, s).levelForThresholdDb(std::max(value, kSqlMinDb));
+    // The spec defines dB only. A positive value is outside its range, and is
+    // most likely an older client's 0..100 level; read as dB it would close
+    // the squelch, so it is ignored (TCI 2.1 p.6). At or below what level 0
+    // is reported as (-140 dB, or a higher floor the scale publishes), the
+    // squelch opens fully, so level 0 stays reachable and its own echo, sent
+    // back, does not move it.
+    if (value > 0.0) return {};
+    const int level = (value <= sqlLevelDb(m_model, s, 0))
+        ? 0
+        : sqlScaleFor(m_model, s).levelForThresholdDb(value);
     auto& pending = (*m_pendingSquelch)[trx];
     pending.level = level;
     queueSquelch(s, trx, pending.on.value_or(s->receiveSquelchOn()), level);
@@ -1886,8 +1891,7 @@ QString TciProtocol::cmdRxChannelEnable(const QStringList& args, bool isSet)
 // RX_VOLUME is per receiver and per channel per TCI v2.0, on the same dB scale
 // as `volume:` (-60..0; -60 = silence).
 //   GET = `rx_volume:trx,channel;`   SET = `rx_volume:trx,channel,dB;`
-// Channel 0 is the receiver's slice; channel 1 is the route's TX slice
-// (tci-receivers.md rule 5), resolved by sliceForVfo() as `vfo:` does.
+// A slice has one audio gain, so both channels read and write the same level.
 // Before this, the channel was read as the gain, so every spec SET muted the
 // slice. Older builds took `rx_volume:trx,N;` with N as percent; a second
 // argument that cannot be a channel (>= 2) is still read that way.
@@ -1916,17 +1920,14 @@ QString TciProtocol::cmdRxVolume(const QStringList& args, bool /*isSet*/)
         }
     }
 
-    SliceModel* target = sliceForVfo(trx, channel);
-    if (!target) return {};
-
     if (pct < 0) {
         return QStringLiteral("rx_volume:%1,%2,%3;")
                    .arg(trx).arg(channel)
-                   .arg(volumeDbFromPercent(qRound(target->audioGain())));
+                   .arg(volumeDbFromPercent(qRound(s->audioGain())));
     }
 
     const float gain = static_cast<float>(pct);
-    QMetaObject::invokeMethod(target, [target, gain]() { target->setAudioGain(gain); },
+    QMetaObject::invokeMethod(s, [s, gain]() { s->setAudioGain(gain); },
                               Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("rx_volume:%1,%2,%3;")
                                 .arg(trx).arg(channel).arg(volumeDbFromPercent(pct));
