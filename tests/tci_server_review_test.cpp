@@ -3360,8 +3360,7 @@ int main(int argc, char** argv)
                 valueSeed ? "PASS" : "FAIL");
 
     const bool txFilterBandEx = AetherSDR::TciServerReviewTest::txFilterBandExRoundTrips();
-    std::printf("%s  tx_filter_band_ex seeds, reads, sets and broadcasts the TX passband
-",
+    std::printf("%s  tx_filter_band_ex seeds, reads, sets and broadcasts the TX passband\n",
                 txFilterBandEx ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
