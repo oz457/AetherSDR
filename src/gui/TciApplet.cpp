@@ -235,9 +235,45 @@ void TciApplet::buildUI()
         QSignalBlocker b(m_tciEnable);
         m_tciEnable->setChecked(tciAutoStart);
     }
+
+    // EXPERIMENT (kurt-experiments): RX via AetherRX, see TciServer::setRxViaAetherRx.
+    m_rxViaAetherRx = new QPushButton(tr("Send AetherRX DSP audio over TCI"));
+    m_rxViaAetherRx->setCheckable(true);
+    m_rxViaAetherRx->setObjectName(QStringLiteral("tciRxViaAetherRx"));
+    m_rxViaAetherRx->setAccessibleName(tr("Send AetherRX DSP audio over TCI"));
+    m_rxViaAetherRx->setToolTip(tr(
+        "<b>Send AetherRX DSP audio over TCI</b> (experimental)<br><br>"
+        "Off: TCI clients get the slice audio straight from the radio, before "
+        "AetherRX. This is what digital-mode decoders (WSJT-X, JTDX) want.<br><br>"
+        "On: the TCI receiver of the active slice gets the audio you hear on "
+        "the PC, after AetherRX (NR2/NR4/RNNoise, EQ, gate, compressor, tube). "
+        "Slice volume and mute affect it; master volume does not.<br><br>"
+        "Needs PC audio on and a 24 or 48 kHz output device. When that audio "
+        "stops (TX, PC audio off) TCI falls back to the raw slice audio."));
+    m_rxViaAetherRx->setStyleSheet(kGreenToggle);
+    m_rxViaAetherRx->setFixedHeight(22);
+    {
+        QSignalBlocker b(m_rxViaAetherRx);
+        m_rxViaAetherRx->setChecked(
+            settings.value("TciRxViaAetherRx", "False").toString() == "True");
+    }
+    auto* dspRow = new QHBoxLayout;
+    dspRow->setContentsMargins(4, 0, 4, 2);
+    dspRow->addWidget(m_rxViaAetherRx, 1);
+    connect(m_rxViaAetherRx, &QPushButton::toggled, this, [this](bool on) {
+        if (m_tciServer) {
+            m_tciServer->setRxViaAetherRx(on);
+        } else {
+            auto& ss = AppSettings::instance();
+            ss.setValue("TciRxViaAetherRx", on ? "True" : "False");
+            ss.save();
+        }
+    });
+
     enableRow->addWidget(m_tciEnable);
 
     outer->addLayout(enableRow);
+    outer->addLayout(dspRow);
 
     connect(m_tciPort, &QLineEdit::editingFinished, this, [this]() {
         int port = m_tciPort->text().toInt();

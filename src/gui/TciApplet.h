@@ -57,6 +57,7 @@ private:
     int m_maxDaxChannels{kChannels};  // radio slice capacity (FlexLib table)
 
     QPushButton* m_tciEnable{nullptr};
+    QPushButton* m_rxViaAetherRx{nullptr};  // experiment, kurt-experiments only
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 
