@@ -152,6 +152,7 @@ RIT and XIT work per receiver, ±9999 Hz. When transmit passes to another receiv
 - **TUNE** keys at **Tune Power**, and moving Tune Power during a tune changes the carrier. Tune Power is remembered per band.
 - **Show TX in Waterfall:** **Settings → Radio Setup... → Transmit → Show TX in Waterfall** lets the waterfall draw spectrum rows over the TX passband while transmitting. It starts off, and AetherSDR remembers your choice separately for each HL2 across reconnects and restarts. The control does not key the radio.
 - **Max Power:** **Settings → Radio Setup... → Transmit → Max Power** shows the HL2's rated watts, read-only. The power gauge uses a 5 W scale, and forward power reads near PEP on speech.
+- **SWR while transmitting** is the ratio of the highest forward and the highest reflected reading in each 0.1 s telemetry window, so it reads the load rather than the speech envelope. It appears about 0.2 s after keying and holds its last reading through pauses in speech. Unkeyed, and in **Tools → Radio Health...**, SWR is the ratio of the latest pair of readings.
 - **RF power slider:** the radio has 16 drive steps, so several slider positions do nothing and then one position adds about 1.25 dB.
 - **AM, DSB and FM** transmit through the same TXA modulator as SSB. FM is simplex and carries no CTCSS tone.
 - **Modes that refuse to transmit:** SAM, WBFM and DRM refuse MOX and TUNE. SAM is a receive detector choice; wide FM has no transmit modulator, and DRM has no encoder. A mode the HL2 cannot demodulate is refused everywhere.
