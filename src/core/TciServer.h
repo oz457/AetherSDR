@@ -571,7 +571,6 @@ private:
     bool m_tuneBroadcastQueued { false };
     QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
-    float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
     // tx_sensors' SWR goes through the S-meter's trust gate (see the
     // txMetersChanged hookup); reset on every un-key edge.
