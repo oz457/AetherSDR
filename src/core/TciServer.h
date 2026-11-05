@@ -159,6 +159,11 @@ public:
     // than 24/48 kHz). Persists to TciRxViaAetherRx.
     void setRxViaAetherRx(bool on);
     bool rxViaAetherRx() const { return m_rxViaAetherRx; }
+    // Run TCI TX audio through the client TX voice chain (EQ, compressor, ...)
+    // before it is transmitted. For voice clients; off by default because
+    // digital-mode clients send pre-shaped tones. Persists to TciTxVoiceDsp.
+    void setTxVoiceDsp(bool on);
+    bool txVoiceDsp() const { return m_txVoiceDsp; }
 
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
@@ -188,6 +193,7 @@ public slots:
 
 signals:
     void clientCountChanged(int count);
+    void txVoiceDspChanged(bool on);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
     // (connect, disconnect, audio start/stop). The TCI tab repopulates on
@@ -409,6 +415,7 @@ private:
     int aetherRxTargetSlice() const;
     bool aetherRxLive() const;
     bool              m_rxViaAetherRx{false};
+    bool              m_txVoiceDsp{false};
     QMetaObject::Connection m_aetherRxConn;
     PcmProducer       m_aetherRxProducer;
     int               m_aetherRxSlice{-1};

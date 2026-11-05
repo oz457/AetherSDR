@@ -223,6 +223,8 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
         m_rxViaAetherRx = s.value(QStringLiteral("TciRxViaAetherRx"), "False")
                               .toString() == QStringLiteral("True");
+        m_txVoiceDsp = s.value(QStringLiteral("TciTxVoiceDsp"), "False")
+                           .toString() == QStringLiteral("True");
         s.save();
     }
 
@@ -2839,9 +2841,21 @@ void TciServer::setAudioEngine(AudioEngine* audio)
     m_audio = audio;
     if (audio) {
         connect(m_io.get(), &TciIoWorker::txPcmReady, audio,
-                &AudioEngine::feedDaxTxAudio, Qt::QueuedConnection);
+                &AudioEngine::feedTciTxAudio, Qt::QueuedConnection);
+        audio->setTciTxVoiceDsp(m_txVoiceDsp);
     }
     rewireAetherRx();
+}
+
+void TciServer::setTxVoiceDsp(bool on)
+{
+    if (m_txVoiceDsp == on) { return; }
+    m_txVoiceDsp = on;
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("TciTxVoiceDsp"), on ? "True" : "False");
+    s.save();
+    if (m_audio) { m_audio->setTciTxVoiceDsp(on); }
+    emit txVoiceDspChanged(on);
 }
 
 void TciServer::setRxViaAetherRx(bool on)

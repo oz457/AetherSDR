@@ -58,6 +58,7 @@ private:
 
     QPushButton* m_tciEnable{nullptr};
     QPushButton* m_rxViaAetherRx{nullptr};  // experiment, kurt-experiments only
+    QPushButton* m_txVoiceDsp{nullptr};
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 

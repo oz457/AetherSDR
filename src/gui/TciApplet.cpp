@@ -272,8 +272,42 @@ void TciApplet::buildUI()
 
     enableRow->addWidget(m_tciEnable);
 
+    // TCI TX audio through the client TX chain, see TciServer::setTxVoiceDsp.
+    m_txVoiceDsp = new QPushButton(tr("TCI TX audio through TX DSP"));
+    m_txVoiceDsp->setCheckable(true);
+    m_txVoiceDsp->setObjectName(QStringLiteral("tciTxVoiceDsp"));
+    m_txVoiceDsp->setAccessibleName(tr("Run TCI TX audio through the TX DSP chain"));
+    m_txVoiceDsp->setToolTip(tr(
+        "<b>TCI TX audio through TX DSP</b> (experimental)<br><br>"
+        "Off: audio a TCI client transmits goes to the radio as it is sent. "
+        "This is what digital modes (WSJT-X, JTDX, fldigi) need.<br><br>"
+        "On: it goes through the same TX chain as the microphone: gate, EQ, "
+        "de-esser, compressor, tube, enhancer, reverb and the final limiter. "
+        "For voice clients such as TCI Remote and its audio banks. Mic gain "
+        "and RNNoise are not applied.<br><br>DAX audio is never affected."));
+    m_txVoiceDsp->setStyleSheet(kGreenToggle);
+    m_txVoiceDsp->setFixedHeight(22);
+    {
+        QSignalBlocker b(m_txVoiceDsp);
+        m_txVoiceDsp->setChecked(
+            settings.value("TciTxVoiceDsp", "False").toString() == "True");
+    }
+    auto* txDspRow = new QHBoxLayout;
+    txDspRow->setContentsMargins(4, 0, 4, 2);
+    txDspRow->addWidget(m_txVoiceDsp, 1);
+    connect(m_txVoiceDsp, &QPushButton::toggled, this, [this](bool on) {
+        if (m_tciServer) {
+            m_tciServer->setTxVoiceDsp(on);
+        } else {
+            auto& ss = AppSettings::instance();
+            ss.setValue("TciTxVoiceDsp", on ? "True" : "False");
+            ss.save();
+        }
+    });
+
     outer->addLayout(enableRow);
     outer->addLayout(dspRow);
+    outer->addLayout(txDspRow);
 
     connect(m_tciPort, &QLineEdit::editingFinished, this, [this]() {
         int port = m_tciPort->text().toInt();
@@ -423,8 +457,19 @@ void TciApplet::setRadioModel(RadioModel* model)
 void TciApplet::setTciServer(TciServer* tci)
 {
 #ifdef HAVE_WEBSOCKETS
+    if (m_tciServer) {
+        disconnect(m_tciServer, &TciServer::txVoiceDspChanged, this, nullptr);
+    }
     m_tciServer = tci;
     if (tci) {
+        {
+            QSignalBlocker b(m_txVoiceDsp);
+            m_txVoiceDsp->setChecked(tci->txVoiceDsp());
+        }
+        connect(tci, &TciServer::txVoiceDspChanged, this, [this](bool on) {
+            QSignalBlocker b(m_txVoiceDsp);
+            m_txVoiceDsp->setChecked(on);
+        });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });
     }
