@@ -4028,7 +4028,7 @@ void TciServer::teardownTciRoute()
     });
 }
 
-bool TciServer::txSensorsKeyed(const RadioModel& model)
+bool TciServer::txSensorsKeyed(RadioModel& model)
 {
     // isTransmitting() is MOX/PTT only; tune is a transmission too, and it is
     // when an operator reads SWR.
