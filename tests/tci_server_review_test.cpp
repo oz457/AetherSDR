@@ -490,6 +490,44 @@ public:
                 == QStringLiteral("capacity test");
     }
 
+    // tx_filter_band_ex (Thetis extension): the init burst carries the TX
+    // passband, a GET reads it, and a SET is normalised the Thetis way
+    // (absolute, swapped when reversed) before TransmitModel adopts it. The
+    // adopted passband is broadcast, which is also the SET's only reply.
+    static bool txFilterBandExRoundTrips()
+    {
+        RadioModel model;
+        TciServer server(&model);
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+        model.transmitModel().setTxFilter(2650, 2700);
+        if (!protocol.generateInitBurst().contains(
+                QStringLiteral("tx_filter_band_ex:2650,2700;"))
+            || protocol.handleCommand(QStringLiteral("tx_filter_band_ex"))
+                != QStringLiteral("tx_filter_band_ex:2650,2700;")) {
+            return false;
+        }
+
+        TciClient socket;
+        TciServer::ClientState client;
+        client.socket = &socket;
+        server.m_clients.append(client);
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+                         [&sent](const QString& direction, const QString& text) {
+            if (direction == QLatin1String("tx")) {
+                sent.append(text.trimmed());
+            }
+        });
+        if (!protocol.handleCommand(QStringLiteral("tx_filter_band_ex:2900,-100"))
+                 .isEmpty()) {
+            return false;
+        }
+        QCoreApplication::processEvents();
+        return model.transmitModel().txFilterLow() == 100
+            && model.transmitModel().txFilterHigh() == 2900
+            && sent.contains(QStringLiteral("tx_filter_band_ex:100,2900;"));
+    }
+
     static bool chronoStallSnapshotIsIdle()
     {
         RadioModel model;
@@ -3460,6 +3498,10 @@ int main(int argc, char** argv)
     std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
                 tciSwrGated ? "PASS" : "FAIL");
 
+    const bool txFilterBandEx = AetherSDR::TciServerReviewTest::txFilterBandExRoundTrips();
+    std::printf("%s  tx_filter_band_ex seeds, reads, sets and broadcasts the TX passband\n",
+                txFilterBandEx ? "PASS" : "FAIL");
+
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
     const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
@@ -3467,7 +3509,7 @@ int main(int argc, char** argv)
     std::printf("%s  worker streams and revokes TX while owner is stalled\n", workerStall ? "PASS" : "FAIL");
     std::printf("%s  late key abort runs on model owner\n", lateKeyAbort ? "PASS" : "FAIL");
 
-    return workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
+    return txFilterBandEx && workerStall && lateKeyAbort && inputFence && validProfile && freeDvModeAliases
         && deferredAbort && observableFailure
         && payloadFreeDisconnect && outboundTextAccounting && pttBindsReceiver
         && pttUsesStableMap && ownershipJoin
