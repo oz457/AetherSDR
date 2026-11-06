@@ -42,6 +42,23 @@ public:
     // HL2 IQ rate and the audio rate — see the note in buildChannel().
     static constexpr int kWdspDspSampleRateHz = 48000;
 
+    // Input block for an HL2 IQ rate: the same 1024 samples at the DSP rate,
+    // so one block is ~21.3 ms at every rate (2048 at 96k, 4096 at 192k, 8192
+    // at 384k). A fixed 1024 shrinks WDSP's block with the rate (dsp_size 256
+    // and 128 output frames at 192k, 128 and 64 at 384k), and at those sizes
+    // the live, non-blocking processIq() loses output blocks: fexchange2 hands
+    // back -2 and zeros and moves on, heard as a crackle and counted in Radio
+    // Health as DSP pipeline underruns. A rate that is not a multiple of the
+    // DSP rate keeps 1024.
+    [[nodiscard]] static constexpr int dspBlockSizeForRate(int inputSampleRateHz) noexcept
+    {
+        constexpr int kBlockAtDspRate = 1024;
+        if (inputSampleRateHz < kWdspDspSampleRateHz
+            || inputSampleRateHz % kWdspDspSampleRateHz != 0)
+            return kBlockAtDspRate;
+        return kBlockAtDspRate * (inputSampleRateHz / kWdspDspSampleRateHz);
+    }
+
     // RX filter length. This is also the manual-notch resolution: WDSP's
     // narrowest notch is 1600 / (taps/256) Hz at kWdspDspSampleRateHz, and it
     // WIDENS a narrower request instead of rejecting it. 8192 taps buys a 50 Hz

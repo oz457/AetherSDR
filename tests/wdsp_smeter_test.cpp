@@ -50,6 +50,17 @@ int main()
               && WdspSMeter::emitEveryBlocks(48000, 0) == 1
               && WdspSMeter::emitEveryBlocks(24000, kDspRate) == 1,
           "a degenerate or sub-DSP-rate geometry reads every block");
+    // A block that grows with the input rate is already ~21 ms long: every one
+    // is read, and the 1024-sample case is the two-argument form.
+    check(WdspSMeter::emitEveryBlocks(384000, 8192, kDspRate) == 1
+              && WdspSMeter::emitEveryBlocks(192000, 4096, kDspRate) == 1,
+          "an HL2 per-rate block (1024 * rate / 48k) is read every block");
+    check(WdspSMeter::emitEveryBlocks(1536000, 1024, kDspRate)
+              == WdspSMeter::emitEveryBlocks(1536000, kDspRate)
+              && WdspSMeter::emitEveryBlocks(384000, 2048, kDspRate) == 4,
+          "the cadence follows the block's wall time");
+    check(WdspSMeter::emitEveryBlocks(48000, 0, kDspRate) == 1,
+          "a zero block reads every block rather than dividing by zero");
 
     // ---- the tap gate: settle, then cadence ----
     {
