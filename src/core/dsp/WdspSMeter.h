@@ -57,10 +57,21 @@ struct WdspSMeter final {
     [[nodiscard]] static int emitEveryBlocks(int inputSampleRateHz,
                                              int dspSampleRateHz) noexcept
     {
-        if (inputSampleRateHz <= 0 || dspSampleRateHz <= 0)
-            return 1;
-        return std::max(1, inputSampleRateHz / dspSampleRateHz);
+        return emitEveryBlocks(inputSampleRateHz, kCadenceBlock, dspSampleRateHz);
     }
+    // The same cadence for any block size: one reading per kCadenceBlock
+    // samples at the DSP rate. A block that grows with the input rate (HL2:
+    // 1024 * inputRate / 48k) is already ~21 ms long, so every block is read.
+    [[nodiscard]] static int emitEveryBlocks(int inputSampleRateHz, int dspBlockSize,
+                                             int dspSampleRateHz) noexcept
+    {
+        if (inputSampleRateHz <= 0 || dspBlockSize <= 0 || dspSampleRateHz <= 0)
+            return 1;
+        const long long every = static_cast<long long>(inputSampleRateHz) * kCadenceBlock
+            / (static_cast<long long>(dspSampleRateHz) * dspBlockSize);
+        return static_cast<int>(std::max(1LL, every));
+    }
+    static constexpr int kCadenceBlock = 1024;
 };
 
 // The tap's gate, on the DSP thread. arm() on a channel install and on the
@@ -73,7 +84,8 @@ public:
     void arm(int inputSampleRateHz, int dspBlockSize, int dspSampleRateHz) noexcept
     {
         m_settleBlocks = WdspSMeter::settleBlocks(inputSampleRateHz, dspBlockSize);
-        m_every = WdspSMeter::emitEveryBlocks(inputSampleRateHz, dspSampleRateHz);
+        m_every = WdspSMeter::emitEveryBlocks(inputSampleRateHz, dspBlockSize,
+                                              dspSampleRateHz);
         m_sinceRead = 0;
     }
     // True when this block's reading should be read and emitted.

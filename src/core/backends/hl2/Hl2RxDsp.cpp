@@ -115,8 +115,9 @@ Hl2RxDsp::RebuildResult Hl2RxDsp::buildChannel(
     // dsp_size describes the same span of time as in_size, but at dsp_rate:
     //     dsp_insize = dsp_size * (in_rate / dsp_rate)   [WDSP channel.c]
     // so dsp_size = in_size * dsp_rate / in_rate makes WDSP consume exactly one
-    // of our input blocks per DSP pass. At the HL2's 48 kHz default that is
-    // 1024; at 192 kHz it is 256.
+    // of our input blocks per DSP pass. The backend sizes the input block per
+    // rate (dspBlockSizeForRate), so this is 1024 at every HL2 rate; a fixed
+    // 1024-sample input block would make it 256 at 192 kHz.
     wc.dspBlockSize = static_cast<std::size_t>(config.dspBlockSize) *
                       static_cast<std::size_t>(kWdspDspSampleRateHz) /
                       static_cast<std::size_t>(config.inputSampleRateHz);
@@ -360,7 +361,7 @@ void Hl2RxDsp::armMeterSettle()
     // linear-phase filter's ~85 ms group delay (4096 samples at 48 kHz) still
     // feeds zeros; the remaining ~0.215 s leaves the first reading ~0.5 dB low
     // (pinned by hl2_adc_sampling_seam_test). The arm also sets the read cadence
-    // to every inputRate/48k-th block, ~47 readings/s at any rate.
+    // from the block's wall time, ~47 readings/s at any rate and block size.
     m_meterTap.arm(m_config.inputSampleRateHz, m_config.dspBlockSize,
                    kWdspDspSampleRateHz);
 }

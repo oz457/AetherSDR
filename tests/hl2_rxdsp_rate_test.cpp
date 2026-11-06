@@ -36,17 +36,30 @@ static void check(bool cond, const char* what)
 
 static constexpr double kPi = 3.14159265358979323846;
 
+// The input block grows with the rate so WDSP's own blocks stay the 48 kHz
+// size. At a fixed 1024 they shrank to 256/128 (dsp) and 128/64 (audio frames)
+// at 192/384 kHz, and the live non-blocking path lost output blocks there.
+static_assert(Hl2RxDsp::dspBlockSizeForRate(48000) == 1024);
+static_assert(Hl2RxDsp::dspBlockSizeForRate(96000) == 2048);
+static_assert(Hl2RxDsp::dspBlockSizeForRate(192000) == 4096);
+static_assert(Hl2RxDsp::dspBlockSizeForRate(384000) == 8192);
+static_assert(Hl2RxDsp::dspBlockSizeForRate(0) == 1024
+              && Hl2RxDsp::dspBlockSizeForRate(24000) == 1024
+              && Hl2RxDsp::dspBlockSizeForRate(100000) == 1024,
+              "a rate that is not a multiple of the DSP rate keeps 1024");
+
 // Demodulate a tone 1 kHz above centre at `rateHz` and return the peak |sample|
 // of the audio that came out.
 static float demodPeakAt(int rateHz, std::size_t* outBlockSamples,
-                         int* audioBlocks, std::string* err)
+                         int* audioBlocks, std::size_t* wdspDspBlock,
+                         std::string* err)
 {
     Hl2RxDsp dsp;
     Hl2RxDsp::Config cfg;
     // EXACTLY what Hl2Backend::connectRadio and setPanBandwidth build.
     cfg.inputSampleRateHz = rateHz;
     cfg.audioSampleRateHz = 24000;    // AudioEngine's native RX rate
-    cfg.dspBlockSize = 1024;
+    cfg.dspBlockSize = Hl2RxDsp::dspBlockSizeForRate(rateHz);
     cfg.fftSize = 1024;
     cfg.mode = WdspChannel::Mode::Usb;
     cfg.filterLowHz = 150.0;
@@ -55,6 +68,8 @@ static float demodPeakAt(int rateHz, std::size_t* outBlockSamples,
 
     if (!dsp.configure(cfg, err))
         return -1.0f;
+    if (wdspDspBlock)
+        *wdspDspBlock = dsp.channelConfig() ? dsp.channelConfig()->dspBlockSize : 0;
 
     float peak = 0.0f;
     int blocks = 0;
@@ -101,22 +116,24 @@ int main(int argc, char** argv)
 
     // The four rates the gateware can run — the same list Hl2Backend advertises
     // and snaps zoom requests to.
-    struct Row { int rateHz; float peak; std::size_t blockSamples; int blocks; };
-    Row rows[] = {{48000, 0, 0, 0}, {96000, 0, 0, 0},
-                  {192000, 0, 0, 0}, {384000, 0, 0, 0}};
+    struct Row { int rateHz; float peak; std::size_t blockSamples; int blocks;
+                 std::size_t dspBlock; };
+    Row rows[] = {{48000, 0, 0, 0, 0}, {96000, 0, 0, 0, 0},
+                  {192000, 0, 0, 0, 0}, {384000, 0, 0, 0, 0}};
 
     for (auto& r : rows) {
         std::string err;
-        r.peak = demodPeakAt(r.rateHz, &r.blockSamples, &r.blocks, &err);
+        r.peak = demodPeakAt(r.rateHz, &r.blockSamples, &r.blocks, &r.dspBlock, &err);
         if (r.peak < 0.0f) {
             std::fprintf(stderr, "FAIL: %d Hz did not configure: %s\n",
                          r.rateHz, err.c_str());
             ++g_failures;
             continue;
         }
-        // outputBlockSize = dspBlockSize * 24000 / rate, interleaved stereo.
-        const std::size_t expect =
-            static_cast<std::size_t>(1024) * 24000 / static_cast<std::size_t>(r.rateHz) * 2;
+        // outputBlockSize = dspBlockSize * 24000 / rate, interleaved stereo:
+        // with the per-rate input block, 512 frames at every rate.
+        const std::size_t expect = static_cast<std::size_t>(512) * 2;
+        check(r.dspBlock == 1024, "WDSP's dsp block is 1024 at every rate");
         std::fprintf(stderr,
                      "%6d Hz in -> audio peak %.5f, %d blocks of %zu samples "
                      "(expect %zu)\n",

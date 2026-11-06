@@ -1204,6 +1204,7 @@ void Hl2Backend::startReceiverDspBuild(int uiNumber)
     Hl2RxDsp::Config config;
     config.inputSampleRateHz = m_rateLedger.committed();
     config.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+    config.dspBlockSize = Hl2RxDsp::dspBlockSizeForRate(config.inputSampleRateHz);
     config.mode = modeFromString(r->mode);
     std::tie(config.filterLowHz, config.filterHighHz) = dspFilterHz(*r);
     config.agcMode = wdspAgcMode(r->agcMode);
@@ -2940,6 +2941,7 @@ void Hl2Backend::connectRadio(const RadioConnectRequest& request)
     Hl2RxDsp::Config dc;
     dc.inputSampleRateHz = m_sampleRateHz;
     dc.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+    dc.dspBlockSize = Hl2RxDsp::dspBlockSizeForRate(dc.inputSampleRateHz);
 
     // The transmit chain follows the TX RECEIVER's mode, not "the mode": with
     // several receivers there is no single one. Built here, on the GUI thread,
@@ -4501,6 +4503,7 @@ void Hl2Backend::applyPanBandwidth(double hz)
         st.index = i;
         st.next.inputSampleRateHz = m_sampleRateHz;
         st.next.audioSampleRateHz = 24000;   // AudioEngine's native RX rate
+        st.next.dspBlockSize = Hl2RxDsp::dspBlockSizeForRate(st.next.inputSampleRateHz);
         st.next.mode = modeFromString(r.mode);
         std::tie(st.next.filterLowHz, st.next.filterHighHz) = dspFilterHz(r);
         // Carried through the rebuild rather than reapplied afterwards. A
@@ -4755,6 +4758,7 @@ void Hl2Backend::finishRateChange(bool ok, quint64 generation, int targetRate,
         Hl2RxDsp::Config dc;
         dc.inputSampleRateHz = targetRate;
         dc.audioSampleRateHz = 24000;
+        dc.dspBlockSize = Hl2RxDsp::dspBlockSizeForRate(dc.inputSampleRateHz);
         dc.mode = modeFromString(r.mode);
         std::tie(dc.filterLowHz, dc.filterHighHz) = dspFilterHz(r);
         dc.agcMode = wdspAgcMode(r.agcMode);
