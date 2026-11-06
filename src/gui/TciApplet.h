@@ -64,6 +64,7 @@ private:
     QCheckBox* m_txVoiceDsp{nullptr};
     ControlAvailabilityRegistry* m_lineOutAvailability{nullptr};
     ControlAvailabilityRegistry* m_lineOutPcAudioOffAvailability{nullptr};
+    QPushButton* m_rxViaAetherRx{nullptr};  // experiment, kurt-experiments only
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 
