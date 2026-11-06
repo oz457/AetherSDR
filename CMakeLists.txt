@@ -1259,6 +1259,7 @@ if(WIN32)
 endif()
 
 set(MODEL_SOURCES
+    src/models/RadioSwrValidityFilter.cpp
     src/models/DecoderAudioModel.cpp
     src/models/Ax25ReceiveModel.cpp
     src/models/AprsDigipeaterModel.cpp
@@ -1479,7 +1480,6 @@ set(GUI_SOURCES
     src/gui/AdaptiveFilterControls.cpp
     src/gui/FilterPassbandWidget.cpp
     src/gui/AnalogMeterFaceTheme.cpp
-    src/gui/RadioSwrValidityFilter.cpp
     src/gui/SMeterGeometry.cpp
     src/gui/SMeterWidget.cpp
     src/gui/CrossNeedleMeterGeometry.cpp
