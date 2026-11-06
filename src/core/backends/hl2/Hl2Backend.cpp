@@ -37,6 +37,7 @@
 #include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -56,6 +57,15 @@ static_assert(AetherSDR::hl2::Hl2TxDsp::Config{}.alcTargetPeak == 0.85,
 // shared object is better than two with separate enabled flags.
 
 namespace AetherSDR::hl2 {
+
+namespace {
+std::atomic<bool> g_hostOffersTransmit{true};
+}
+
+void Hl2Backend::setHostOffersTransmit(bool offers)
+{
+    g_hostOffersTransmit.store(offers);
+}
 
 // Declared incomplete in the header so it keeps its forward declarations of
 // MetisClient/Hl2RxDsp/Hl2TxDsp; the async connect is the only thing that needs
@@ -247,6 +257,12 @@ constexpr double kTuningMaxHz = 38'400'000.0;
     return hz >= kTuningMinHz && hz <= kTuningMaxHz;
 }
 
+// Where a pan centre request lands: inside that range, at its nearest edge.
+[[nodiscard]] double tunablePanCenterHz(double hz) noexcept
+{
+    return std::clamp(hz, kTuningMinHz, kTuningMaxHz);
+}
+
 // A remembered passband is kept only as a sane pair inside the 12 kHz audio
 // ceiling; a CW pair must also contain the carrier (pre-#4914 pairs do not).
 [[nodiscard]] bool restorablePassband(double lowHz, double highHz, bool cw) noexcept
@@ -330,11 +346,13 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     const bool automationAllowsTx =
         qEnvironmentVariableIsSet("AETHER_AUTOMATION_ALLOW_TX")
         || AutomationBridgeSettings::txAllowed();
-    m_txAllowed = !automation || automationAllowsTx;
+    m_txAllowed = g_hostOffersTransmit.load() && (!automation || automationAllowsTx);
     if (m_txAllowed) {
         m_metis->enableTransmit(true);
         qInfo() << "Hl2Backend: transmit available"
                 << (automation ? "(automation, ALLOW_TX)" : "(interactive)");
+    } else if (!g_hostOffersTransmit.load()) {
+        qInfo() << "Hl2Backend: receive only — this host has no HL2 transmit path";
     } else {
         qInfo() << "Hl2Backend: transmit BLOCKED — automation bridge active "
                    "without AETHER_AUTOMATION_ALLOW_TX";
@@ -525,6 +543,10 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
             m_linkStatsTimer->stop();
             resetIoBoardSchedule();
             resetBandscopeMirrors();
+            // IQ taps belong to the session too. A consumer that held one
+            // re-arms it on the next session; one that left during the outage
+            // must not have its copy resumed by the next DSP build.
+            m_iqTapUis.clear();
             refreshPureSignalAvailability();
             emit disconnected();
         }
@@ -1946,6 +1968,10 @@ void Hl2Backend::loadPureSignalPreferences()
     const QJsonObject doc = scope.feature(QLatin1String(kPureSignalFeature), &version);
     m_psAutoCalibrate = true;
     m_psAutoAttenuate = true;
+    // Only a manual attenuation is stored. What auto-attenuate reaches depends
+    // on the band, the drive and the coupler of the moment, so it is not
+    // persisted: each session starts at kAttMax and auto-attenuate finds its
+    // level again on the first calibration.
     m_psAttenuationDb = Hl2PureSignalLogic::kAttMax;
     if (!doc.isEmpty() && version <= kPureSignalSchemaVersion) {
         m_psAutoCalibrate = doc.value(QStringLiteral("autoCalibrate")).toBool(m_psAutoCalibrate);
@@ -2007,6 +2033,11 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
     } else if (verb == QLatin1String("puresignal.enable")) {
         if (!boolArg(on))
             return refuse(QStringLiteral("puresignal.enable: expects a bool"));
+        // Claiming or releasing DDC 2/3 can change the receiver count on the
+        // wire, which restarts EP6: not in the middle of an over. A loss of
+        // availability still turns it off while keyed (refreshPureSignalAvailability).
+        if (on != m_psEnabled && m_keyed)
+            return refuse(tr("Unkey to change PureSignal"));
         if (!setPureSignalEnabled(on))
             return refuse(m_psUnavailableReason);
     } else if (verb == QLatin1String("puresignal.auto")) {
@@ -2044,6 +2075,7 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
                || verb == QLatin1String("puresignal.reset")) {
         if (!m_psEnabled)
             return refuse(QStringLiteral("PureSignal is off"));
+        clearPureSignalAutoCalibrate();
         if (verb == QLatin1String("puresignal.single"))
             pureSignalCalibrateOnce();
         else
@@ -2058,10 +2090,12 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
                               .arg(kPureSignalMaxPathBytes - 1));
         if (!m_psEnabled)
             return refuse(QStringLiteral("PureSignal is off"));
-        if (verb == QLatin1String("puresignal.save"))
+        if (verb == QLatin1String("puresignal.save")) {
             savePureSignalCorrection(path);
-        else
+        } else {
+            clearPureSignalAutoCalibrate();
             restorePureSignalCorrection(path);
+        }
     } else {
         return refuse(QStringLiteral("hl2: unknown verb %1").arg(verb));
     }
@@ -2070,6 +2104,17 @@ void Hl2Backend::invokePureSignal(const QString& verb, quint64 requestId, const 
     // extensionStatus once it has acted.
     if (requestId != 0)
         emit extensionResult(requestId, pureSignalFields());
+}
+
+void Hl2Backend::clearPureSignalAutoCalibrate()
+{
+    // Single, Reset and Restore switch Auto off; Hl2PureSignal does the same
+    // on the I/O thread. Persisted, so the next session starts with the switch
+    // the operator last saw.
+    if (!m_psAutoCalibrate)
+        return;
+    m_psAutoCalibrate = false;
+    savePureSignalPreferences();
 }
 
 void Hl2Backend::setPureSignalAutoCalibrate(bool on)
@@ -2149,6 +2194,12 @@ Hl2Backend::~Hl2Backend()
         // Stop the wire on its own thread and wait: a queued stop() would never
         // run after quit(). Blocks on the GUI thread for an in-flight DSP build
         // (docs/HERMES.md §22.4); beginDspSetup()'s QPointer relies on this.
+        // PureSignal goes off first, on its own thread: that stops its tick
+        // timer there (a QTimer cannot be stopped from another thread) and
+        // takes the correction off the TXA channel before the wire stops.
+        if (m_pureSignal)
+            QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::BlockingQueuedConnection,
+                                      Q_ARG(bool, false));
         if (m_metis)
             QMetaObject::invokeMethod(m_metis, "stop", Qt::BlockingQueuedConnection);
         m_ioThread->quit();
@@ -2208,6 +2259,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.txPowerBands = {};
     c.declaredBandRanges = {};
     c.family = QStringLiteral("hl2");
+    c.cwReceiveControl = std::nullopt;
     c.panDisplayControl = PanDisplayControl{{PanDisplayField::Geometry, PanDisplayField::RfGain,
         PanDisplayField::FrameRate, PanDisplayField::Average, PanDisplayField::WeightedAverage},
         {PanGeometryComponent::Center, PanGeometryComponent::Bandwidth}};
@@ -2267,10 +2319,10 @@ RadioCapabilities Hl2Backend::capabilities() const
     amplitude.clientPersistsDbmRange = true;
     c.panAmplitude = amplitude;
 
-    // radioOwnsDbmScale is not declared: this radio cannot be commanded a dBm
-    // range, so it would be false, but declaring that is its own change.
-    // binsAbsolute already keeps noiseFloorAutoAdjustAllowed() open (bench run
-    // d101: the loop settles, 0.307 dB in 74 s quiescent).
+    // No dBm range can be commanded or echoed, so a scale drag stays local
+    // instead of dispatching a request this backend refuses. binsAbsolute keeps
+    // noiseFloorAutoAdjustAllowed() open (bench run d101: the loop settles).
+    c.radioOwnsDbmScale = false;
     // Tuning range: the AD9866 samples at 76.8 MHz, so the first Nyquist zone is
     // DC to 38.4 MHz; below 100 kHz the input transformer rolls off.
     c.tuningMinHz = kTuningMinHz;
@@ -2315,7 +2367,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     c.receiveAudioExport = std::nullopt; // native DAX export not qualified for this backend
     c.dspParameterReset = std::nullopt;
     c.receivePanCenterControl = ReceivePanRangeControl{SliceFrequencyControl::Authority::Engine,
-                                                      100'000, 38'400'000};
+        static_cast<qint64>(kTuningMinHz), static_cast<qint64>(kTuningMaxHz)};
     c.receivePanBandwidthControl = std::nullopt; // radio-wide rate can retire other receivers
     // Power class for every forward-power gauge, via the band-table seam
     // (RadioModel::refreshTxPowerLimit; TxApplet scales from a non-empty
@@ -2480,6 +2532,7 @@ RadioCapabilities Hl2Backend::capabilities() const
     // CW, and this client's own noise modules are the only DSP it has. TNF is
     // deliberately NOT gated — see the note in RadioCapabilities.h.
     c.hasRadioSideCwKeyer = false;
+    c.cwTextControl = std::nullopt;
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
@@ -4231,8 +4284,11 @@ void Hl2Backend::setPanCenter(const QString& panId, double hz, PanCenterIntent)
     // Moving the window means moving the DDC. The slice does NOT move with it —
     // that is the point of keeping the two separate — so its offset from the new
     // centre is recomputed and re-applied as a shift.
-    if (hz <= 0.0)
+    if (!std::isfinite(hz) || hz <= 0.0)
         return;
+    // Outside receivePanCenterControl the window stops at the edge, as an Icom
+    // pan drag does (nearestSupportedFrequency); the echo below reports it.
+    hz = tunablePanCenterHz(hz);
     const int ddc = ddcForPan(panId);
     Receiver* r = rx(ddc);
     if (!r)
@@ -4825,6 +4881,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         if (key)
             qWarning() << "Hl2Backend: key refused — automation bridge is active "
                           "without AETHER_AUTOMATION_ALLOW_TX";
+        return;
+    }
+    // A key with no running session is refused here too, so this backend never
+    // records or publishes a key that MetisClient::setMoxImpl() refuses at the
+    // wire. An unkey always goes through.
+    if (key && (!m_metis || !m_metis->isRunning())) {
+        qWarning() << "Hl2Backend: key refused — the radio session is not running";
         return;
     }
     // A manual PTT/MOX asserted while Break-In owns the current key transfers
@@ -5690,6 +5753,15 @@ void Hl2Backend::setTune(bool on, int tunePowerPercent, const AetherSDR::TxCoord
     // The RF power restore lives in setKeying(false), where all unkey paths
     // converge, so m_tuning is set here only on the way up and setKeying()
     // clears it.
+    if (on && (!m_txAllowed || !m_metis || !m_metis->isRunning())) {
+        // Refused before any tune state is set, so nothing is left behind for
+        // an unkey that will never come. Not routed through setKeying(): a
+        // session that starts in between would key without the tune carrier.
+        qWarning() << "Hl2Backend: tune refused —"
+                   << (m_txAllowed ? "the radio session is not running"
+                                   : "transmit is not allowed");
+        return;
+    }
     if (on) {
         m_tuning = true;
         m_tuneOperation = operation;

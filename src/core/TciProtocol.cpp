@@ -211,6 +211,30 @@ int TciProtocol::squelchLevelDb(RadioModel* model, SliceModel* s, int level)
     return sqlLevelDb(model, s, level);
 }
 
+static constexpr double kAgcGainMinDb = -20.0;
+static constexpr double kAgcGainMaxDb = 120.0;
+static constexpr double kAgcGainDbPerStep = (kAgcGainMaxDb - kAgcGainMinDb) / 100.0;
+
+int TciProtocol::agcGainDbForLevel(int level)
+{
+    return static_cast<int>(std::lround(
+        kAgcGainMinDb + kAgcGainDbPerStep * std::clamp(level, 0, 100)));
+}
+
+int TciProtocol::agcLevelForGainDb(double db)
+{
+    return static_cast<int>(std::lround(
+        (std::clamp(db, kAgcGainMinDb, kAgcGainMaxDb) - kAgcGainMinDb) / kAgcGainDbPerStep));
+}
+
+int TciProtocol::agcGainDb(SliceModel* s)
+{
+    if (s->externalReceiveReplacementActive()) {
+        return s->receiveAgcThreshold();
+    }
+    return agcGainDbForLevel(s->receiveAgcThreshold());
+}
+
 SliceModel* TciProtocol::sliceForTrx(int trx) const
 {
     if (m_trxMap)
@@ -426,7 +450,7 @@ QString TciProtocol::generateInitBurst()
             burst += QStringLiteral("agc_mode:%1,%2;")
                          .arg(trx).arg(s->receiveAgcMode().toLower());
             burst += QStringLiteral("agc_gain:%1,%2;")
-                         .arg(trx).arg(s->receiveAgcThreshold());
+                         .arg(trx).arg(agcGainDb(s));
 
             // DSP
             burst += QStringLiteral("rx_nb_enable:%1,%2;")
@@ -1455,17 +1479,31 @@ QString TciProtocol::cmdAgcGain(const QStringList& args, bool isSet)
 
     if (!isSet) {
         return QStringLiteral("agc_gain:%1,%2;")
-                   .arg(trx).arg(s->receiveAgcThreshold());
+                   .arg(trx).arg(agcGainDb(s));
     }
 
     if (args.size() < 2) return {};
-    int gain = 0;
-    if (!argToInt(args, 1, gain)) return {};
-    QMetaObject::invokeMethod(s, [s, gain]() { s->setAgcThreshold(gain); },
-                              Qt::QueuedConnection);
+    double db = 0.0;
+    if (!argToDouble(args, 1, db)) return {};
+    const bool external = s->externalReceiveReplacementActive();
+    // Bound in floating point first: a huge value must not wrap in the
+    // conversion to int and land on the opposite end of the range.
+    const int value = external
+        ? static_cast<int>(std::lround(std::clamp(
+              db, static_cast<double>(s->receiveAgcThresholdMinimum()),
+              static_cast<double>(s->receiveAgcThresholdMaximum()))))
+        : agcLevelForGainDb(db);
+    // The value is in the unit of the receive path chosen here. If a KiwiSDR
+    // replacement starts or stops before the queued call runs, the request is
+    // dropped rather than read in the other path's unit.
+    QMetaObject::invokeMethod(s, [s, value, external]() {
+        if (s->externalReceiveReplacementActive() == external) {
+            s->setAgcThreshold(value);
+        }
+    }, Qt::QueuedConnection);
 
-    m_pendingNotification = QStringLiteral("agc_gain:%1,%2;")
-                                .arg(trx).arg(gain);
+    // The observed threshold relay announces changes, including backend
+    // confirmation. A discarded queued request must announce nothing.
     return {};
 }
 
@@ -1891,7 +1929,8 @@ QString TciProtocol::cmdRxChannelEnable(const QStringList& args, bool isSet)
 // RX_VOLUME is per receiver and per channel per TCI v2.0, on the same dB scale
 // as `volume:` (-60..0; -60 = silence).
 //   GET = `rx_volume:trx,channel;`   SET = `rx_volume:trx,channel,dB;`
-// A slice has one audio gain, so both channels read and write the same level.
+// Channel 0 is the receiver's slice; channel 1 is the route's TX slice
+// (tci-receivers.md rule 5), resolved by sliceForVfo() as `vfo:` does.
 // Before this, the channel was read as the gain, so every spec SET muted the
 // slice. Older builds took `rx_volume:trx,N;` with N as percent; a second
 // argument that cannot be a channel (>= 2) is still read that way.
@@ -1920,14 +1959,17 @@ QString TciProtocol::cmdRxVolume(const QStringList& args, bool /*isSet*/)
         }
     }
 
+    SliceModel* target = sliceForVfo(trx, channel);
+    if (!target) return {};
+
     if (pct < 0) {
         return QStringLiteral("rx_volume:%1,%2,%3;")
                    .arg(trx).arg(channel)
-                   .arg(volumeDbFromPercent(qRound(s->audioGain())));
+                   .arg(volumeDbFromPercent(qRound(target->audioGain())));
     }
 
     const float gain = static_cast<float>(pct);
-    QMetaObject::invokeMethod(s, [s, gain]() { s->setAudioGain(gain); },
+    QMetaObject::invokeMethod(target, [target, gain]() { target->setAudioGain(gain); },
                               Qt::QueuedConnection);
     m_pendingNotification = QStringLiteral("rx_volume:%1,%2,%3;")
                                 .arg(trx).arg(channel).arg(volumeDbFromPercent(pct));
@@ -2000,6 +2042,15 @@ QString TciProtocol::cmdMonEnable(const QStringList& args, bool /*isSet*/)
     }
     bool on = false;
     if (!argToBool(args, args.size() == 1 ? 0 : 1, on)) return {};
+    // A radio with no transmit monitor: leave the model alone and tell peers
+    // the state it really has, as rx_anf_enable does where it refuses. Only ON
+    // is refused: a peer clearing a value a previous radio left behind must
+    // still get through, as `U VOX 0` does on the rigctl road.
+    if (on && !m_model->transmitMonitorAvailable()) {
+        m_pendingNotification = QStringLiteral("mon_enable:%1;")
+            .arg(m_model->transmitModel().sbMonitor() ? "true" : "false");
+        return {};
+    }
     QMetaObject::invokeMethod(m_model, [model = m_model, on]() {
         model->transmitModel().setSbMonitor(on);
     }, Qt::QueuedConnection);
@@ -2018,6 +2069,11 @@ QString TciProtocol::cmdMonVolume(const QStringList& args, bool /*isSet*/)
     }
     int vol = 0;
     if (!argToInt(args, args.size() == 1 ? 0 : 1, vol)) return {};
+    if (!m_model->transmitMonitorAvailable()) {
+        m_pendingNotification = QStringLiteral("mon_volume:%1;")
+            .arg(m_model->transmitModel().monGainSb());
+        return {};
+    }
     QMetaObject::invokeMethod(m_model, [model = m_model, vol]() {
         model->transmitModel().setMonGainSb(vol);
     }, Qt::QueuedConnection);

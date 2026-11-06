@@ -113,6 +113,17 @@ public:
     QVector<TciClientInfo> connectedClients() const;
 
     void setAudioEngine(AudioEngine* audio);
+    void setLineOutIncludeTx(bool enabled);
+    bool lineOutIncludeTx() const { return m_lineOutIncludeTx; }
+    void setLineOutPcAudioOffConsent(bool enabled);
+    bool lineOutPcAudioOffConsent() const { return m_lineOutPcAudioOffConsent; }
+    // Run TCI TX audio through the client TX voice chain (EQ, compressor, ...)
+    // before it is transmitted. For voice clients; off by default because
+    // digital-mode clients send pre-shaped tones. Persists to TciTxVoiceDsp.
+    void setTxVoiceDsp(bool on);
+    bool txVoiceDsp() const { return m_txVoiceDsp; }
+    // The application owns PC Audio preferences; refresh after its toggle.
+    void updateLineOutCapture();
     // Thread-safe owning ingress, safe even if a source callback overlaps
     // controller destruction. The closure contains no controller pointer.
     std::function<void(int, const PcmFrame&)> daxPcmSink() const;
@@ -146,10 +157,8 @@ public:
     void setOverflowMode(int mode);
     int overflowMode() const { return static_cast<int>(m_overflowMode); }
 
-    // Per-channel TCI RX gain (0.0–1.0), applied to outbound DAX audio before
-    // resampling and sending to TCI clients.  Decoupled from DaxRxGain<n> so
-    // DAX bridge and TCI maintain independent per-channel gains.
-    // Channel is 1-based (1–4).  Persists to TciRxGain<channel>.
+    // Per-channel TCI RX attenuation, from silence through unity (0.0-1.0).
+    // Independent of DAX bridge gain; channels 1-8 persist to TciRxGain<channel>.
     void setRxChannelGain(int channel, float gain);
     float rxChannelGain(int channel) const;
 
@@ -160,11 +169,6 @@ public:
     // than 24/48 kHz). Persists to TciRxViaAetherRx.
     void setRxViaAetherRx(bool on);
     bool rxViaAetherRx() const { return m_rxViaAetherRx; }
-    // Run TCI TX audio through the client TX voice chain (EQ, compressor, ...)
-    // before it is transmitted. For voice clients; off by default because
-    // digital-mode clients send pre-shaped tones. Persists to TciTxVoiceDsp.
-    void setTxVoiceDsp(bool on);
-    bool txVoiceDsp() const { return m_txVoiceDsp; }
 
     // Wire slice signals for state change broadcasts
     void wireSlice(int trx, SliceModel* slice);
@@ -193,8 +197,10 @@ public slots:
     void onDaxStreamUnregistered(int channel, quint32 streamId);
 
 signals:
-    void clientCountChanged(int count);
+    void lineOutIncludeTxChanged(bool enabled);
+    void lineOutPcAudioOffConsentChanged(bool enabled);
     void txVoiceDspChanged(bool on);
+    void clientCountChanged(int count);
     void rxBindingsChanged();
     // Fired whenever the client list or any client's subscriptions change
     // (connect, disconnect, audio start/stop). The TCI tab repopulates on
@@ -207,7 +213,7 @@ signals:
     // emitted but can be muted per-command via the monitor's
     // suppression list to keep the stream readable.
     void tciMessage(const QString& direction, const QString& text);
-    void rxLevel(int channel, float rms);  // 1-based channel, RMS of TCI-gained RX audio
+    void rxLevel(int channel, float rms);  // 1-based channel, pre-fader RMS
     void txLevel(float rms);                // RMS of post-gain TCI TX audio
     // Emitted when a TCI client sends `volume:N;` (master volume SET).
     // MainWindow handles it by calling the same path as the title bar
@@ -341,6 +347,8 @@ private:
         int          audioChannels{2};       // 1=mono, 2=stereo
         int          audioFormat{3};         // 0=int16, 3=float32
         quint64 rxGeneration{0};
+        QSet<int> lineOutReceivers;
+        quint64 lineOutGeneration{0};
         bool         rxSensorsEnabled{false};
         bool         txSensorsEnabled{false};
         // TCI IQ subscriptions are per client AND per receiver. SDC can open
@@ -392,6 +400,11 @@ private:
     void reconcileHostIqTaps(int keepSliceId = -1);
 
     void syncClient(const ClientState& client);
+    void syncLineOutClient(const ClientState& client);
+    bool m_lineOutIncludeTx{false};
+    bool m_lineOutPcAudioOffConsent{false};
+    bool m_txVoiceDsp{false};
+    bool m_lineOutCaptureWanted{false};
     TciClient* clientById(quint64 id) const;
     void resetClientRx(ClientState& client);
     void refreshRxBindings();
@@ -422,7 +435,6 @@ private:
     int aetherRxTargetSlice() const;
     bool aetherRxLive() const;
     bool              m_rxViaAetherRx{false};
-    bool              m_txVoiceDsp{false};
     QMetaObject::Connection m_aetherRxConn;
     PcmProducer       m_aetherRxProducer;
     int               m_aetherRxSlice{-1};

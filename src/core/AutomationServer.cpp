@@ -3588,7 +3588,7 @@ const std::vector<AutomationServer::VerbSpec>& AutomationServer::verbRegistry()
             });
 
         add("lab", {},
-            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — Stick Pro USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
+            "lab <status|devices|connect index|sweep startHz stopHz intervals isolated|stop|disconnect> — RigExpert Stick USB PoC (RF requires AETHER_AUTOMATION_ALLOW_LAB_RF=1)",
             parseActionRest,
             [](AutomationServer& s, A& a, QLocalSocket*) {
                 return s.doLab(a.action, a.value);
@@ -11368,8 +11368,9 @@ QJsonObject AutomationServer::doPan(const QString& action, const QString& arg)
 
     if (action == QLatin1String("center")) {
         // Same contract as `tune` — see refuseUntunableMhz(). It matters more
-        // here: RadioModel::setPanCenter() clamps only the LOW edge, so an
-        // out-of-range centre is optimistically stored and advertised over TCI
+        // here: optimistic receive controls clamp the LOW edge and any declared
+        // receivePanCenterControl. Without a declared range, an out-of-range
+        // centre can still be optimistically stored and advertised over TCI
         // (`dds:`) even though the radio rejects it — the same silent no-op as
         // #4550, one verb over.
         double mhz = 0.0;

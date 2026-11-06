@@ -12,7 +12,7 @@
 //   Copyright (C) 2020-2026 Richard Samphire (MW0LGE)
 //   2023-26 HL2 modifications by MI0BOT
 //   License: GPL-2.0-or-later, carried here as part of GPL-3.0-or-later
-//   AetherSDR. See THIRD_PARTY_LICENSES entry 36.
+//   AetherSDR. See THIRD_PARTY_LICENSES entry 37.
 //
 // WDSP's calcc
 // stage does the actual calibration and correction; this file is the part
@@ -53,6 +53,7 @@ struct Hl2PureSignalStatus {
     bool autoCalibrate = false;
     bool autoAttenuate = true;
     bool calibrating = false;    // a calibration is armed (auto or single)
+    bool singleCalibrating = false;  // a single calibration is requested or running
     bool correcting = false;     // info[14]: correction applied to TX
     int feedbackLevel = 0;       // info[4]; 128..181 is the target window
     int calibrationCount = 0;    // info[5]
@@ -125,6 +126,11 @@ public:
         return m_cmd == Cmd::Auto || m_cmd == Cmd::TurnOnAuto
             || m_cmd == Cmd::Single || m_cmd == Cmd::TurnOnSingle;
     }
+    // From the press of Single until that calibration ends, retries included.
+    [[nodiscard]] bool singleCalibrating() const noexcept
+    {
+        return m_singleCalOn || m_cmd == Cmd::Single || m_cmd == Cmd::TurnOnSingle;
+    }
 
     [[nodiscard]] static int clampAtt(int att) noexcept
     {
@@ -170,6 +176,10 @@ public:
     static constexpr double kMoxDelaySec = 0.2;
     static constexpr double kLoopDelaySec = 0.0;
     static constexpr double kTxDelaySec = 150e-9;
+    // One tick runs both of PSForm's machines. Thetis runs timer1code every
+    // 10 ms and timer2code every 100 ms; here both run at 100 ms, so a command
+    // takes up to 100 ms per step instead of 10. calcc does the calibrating
+    // and is unaffected; only how soon a button press reaches it changes.
     static constexpr int kTickMs = 100;
     static constexpr std::size_t kFeedChunk = 512;   // complex samples per pscc()
 
@@ -192,6 +202,10 @@ public:
 public slots:
     void setEnabled(bool on);
     void setKeyed(bool keyed);
+    // calcc is told the rate the feedback DDCs actually run at, so its MOX and
+    // TX delays convert to the right sample counts. MI0BOT's Thetis runs the
+    // HL2's PS DDCs at the receive rate too, but tells calcc cmaster.PSrate,
+    // which is 192000 on every Protocol 1 radio but the Red Pitaya.
     void setFeedbackRateHz(int hz);
     void setAutoCalibrate(bool on);
     void calibrateOnce();
@@ -219,6 +233,7 @@ private:
     Hl2PureSignalLogic m_logic;
     std::function<void(int)> m_txGainSink;
     bool m_enabled = false;
+    void forceAutoOff();
     bool m_wantAuto = false;      // the operator's Auto switch
     bool m_keyed = false;
     WdspChannel::PureSignalInfo m_lastInfo;
