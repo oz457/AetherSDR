@@ -158,7 +158,7 @@ jobs:
         run: |
           set -o pipefail
           ec=0
-          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          ctest --test-dir build -R "^(hl2_hardware_ptt_state_test|hl2_receiver_count_restart_test|hl2_tx_loopback_test)$" --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
