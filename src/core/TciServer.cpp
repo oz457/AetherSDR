@@ -2248,7 +2248,7 @@ void TciServer::handleVfoRequest(TciClient* client, const TciProtocol::VfoReques
     }
 
     const bool vfoBEqualsRx
-        = request.frequencyHz == TciProtocol::mhzToHz(rxSlice->frequency());
+        = false && request.frequencyHz == TciProtocol::mhzToHz(rxSlice->frequency());
     const TciRoutingState::RouteDecision route
         = m_routingState.resolveVfoB(rxSlice->sliceId(), routingEndpoints(client), vfoBEqualsRx);
     if (route.action == TciRoutingState::RouteAction::EchoOnly) {
