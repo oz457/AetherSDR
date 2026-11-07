@@ -291,6 +291,8 @@ private:
     void handleTuneRequest(TciClient* client, const TciProtocol::TuneRequest& request);
     void scheduleTuneBroadcast();
     void broadcastTuneState();
+    void scheduleTxProfileBroadcast();
+    void broadcastTxProfiles();
     void stopTciOwnedTune();
     void teardownTciRoute();
     QJsonObject txChronoStallSnapshot() const;
@@ -537,6 +539,9 @@ private:
     int m_tuneClientTrx { 0 };
     bool m_tuneBroadcastQueued { false };
     QList<QPair<QPointer<TciClient>, int>> m_tuneRequesters;  // owed an answer
+    bool m_txProfileBroadcastQueued { false };
+    QString m_lastTxProfilesSent;   // tx_profiles_ex as last broadcast
+    QString m_lastTxProfileSent;    // tx_profile_ex as last broadcast
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};

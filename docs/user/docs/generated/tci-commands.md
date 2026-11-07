@@ -112,3 +112,5 @@ Not part of the TCI specification.
 | `tx_gain` |
 | `active_slice` |
 | `rx_ctun_ex` |
+| `tx_profiles_ex` |
+| `tx_profile_ex` |

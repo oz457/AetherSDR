@@ -96,6 +96,14 @@ public:
     static int volumeDbFromPercent(int pct);
     static int volumePercentFromDb(double db);
 
+    // tx_profiles_ex / tx_profile_ex (Thetis extension) on the wire.
+    // Shared by the GET replies, the init burst and TciServer's broadcasts
+    // so all three say the same thing. A name holding ',' or ';' cannot
+    // travel in either message: the list leaves it out, and an active
+    // profile with such a name goes out empty.
+    static QString txProfilesMessage(const QStringList& profiles);
+    static QString txProfileMessage(const QString& active);
+
     // After handleCommand(), if the command was a `tx_gain:N;` SET, this
     // returns the requested TCI TX gain (0-100); -1 means no change. TciServer
     // reads it and applies it via setTxGain() — TciProtocol can't reach
@@ -143,6 +151,8 @@ private:
     QString cmdCwMsg(const QStringList& args);
     QString cmdLock(const QStringList& args, bool isSet);
     QString cmdRxCtunEx(const QStringList& args, bool isSet);
+    QString cmdTxProfilesEx();
+    QString cmdTxProfileEx(const QStringList& args);
     QString cmdSqlEnable(const QStringList& args, bool isSet);
     QString cmdSqlLevel(const QStringList& args, bool isSet);
     void queueSquelch(SliceModel* s, int trx, bool on, int level);

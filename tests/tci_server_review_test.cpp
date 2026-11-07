@@ -2929,6 +2929,131 @@ public:
         return true;
     }
 
+    // tx_profiles_ex / tx_profile_ex (Thetis extension): the list and the
+    // active profile answer GETs and ride in the init burst; a SET loads a
+    // listed profile on the model thread and is echoed only once the radio
+    // confirms; a SET that cannot change anything answers the current one.
+    static bool txProfileExListsSelectsAndBroadcasts()
+    {
+        RadioModel model;
+        TciClient sock;
+        TciServer server(&model);
+        TciServer::ClientState cs;
+        cs.socket = &sock;
+        server.m_clients.append(cs);
+        TciProtocol protocol(&model, &server.m_routingState, &server.m_trxMap);
+        auto& tx = model.transmitModel();
+        const auto settle = []() {
+            for (int i = 0; i < 3; ++i)
+                QCoreApplication::processEvents();
+        };
+
+        // A radio without TX profiles (HL2, Icom) answers neither command.
+        if (!protocol.handleCommand(QStringLiteral("tx_profiles_ex")).isEmpty()
+            || !protocol.handleCommand(QStringLiteral("tx_profile_ex")).isEmpty()
+            || protocol.generateInitBurst().contains(QStringLiteral("tx_profile"))) {
+            std::printf("      a radio without TX profiles answered\n");
+            return false;
+        }
+
+        QStringList sent;
+        QObject::connect(&server, &TciServer::tciMessage,
+            [&sent](const QString& dir, const QString& msg) {
+                if (dir == QLatin1String("tx")
+                    && msg.trimmed().startsWith(QLatin1String("tx_profile")))
+                    sent << msg.trimmed();
+            });
+        QStringList loads;
+        QObject::connect(&tx, &TransmitModel::controlRequested,
+            [&loads](const TransmitControlRequest& r) {
+                if (r.field == TransmitControlRequest::Field::TxProfile)
+                    loads << std::get<QString>(r.value);
+            });
+
+        tx.setProfileList({QStringLiteral("Default"), QStringLiteral("FreeDV"),
+                           QStringLiteral("Bad,Name"), QStringLiteral("SSB Wide")});
+        tx.setActiveProfile(QStringLiteral("Default"));
+        settle();
+        const QString list = QStringLiteral("tx_profiles_ex:Default,FreeDV,SSB Wide;");
+        const QString def = QStringLiteral("tx_profile_ex:Default;");
+        if (sent != QStringList{list, def}) {
+            std::printf("      list + active not broadcast once: %s\n",
+                        qPrintable(sent.join(QLatin1Char(' '))));
+            return false;
+        }
+        if (protocol.handleCommand(QStringLiteral("tx_profiles_ex")) != list
+            || protocol.handleCommand(QStringLiteral("tx_profile_ex")) != def) {
+            std::printf("      GETs do not match the model\n");
+            return false;
+        }
+        const QString init = protocol.generateInitBurst();
+        if (!init.contains(list) || !init.contains(def)) {
+            std::printf("      init burst lacks the profiles\n");
+            return false;
+        }
+
+        // SET, any case: the radio's spelling loads, and nothing is echoed
+        // until the radio's status confirms.
+        sent.clear();
+        if (!protocol.handleCommand(QStringLiteral("tx_profile_ex:freedv")).isEmpty()
+            || !protocol.pendingNotification().isEmpty()) {
+            std::printf("      SET answered before the radio confirmed\n");
+            return false;
+        }
+        settle();
+        if (loads != QStringList{QStringLiteral("FreeDV")} || !sent.isEmpty()) {
+            std::printf("      SET did not load FreeDV, or echoed early\n");
+            return false;
+        }
+        tx.setActiveProfile(QStringLiteral("FreeDV"));
+        settle();
+        const QString freeDv = QStringLiteral("tx_profile_ex:FreeDV;");
+        if (sent != QStringList{freeDv}) {
+            std::printf("      confirmed load not broadcast once: %s\n",
+                        qPrintable(sent.join(QLatin1Char(' '))));
+            return false;
+        }
+
+        // Nothing to change: answered with the current profile, nothing
+        // loaded, and other TX state moving is not a profile change.
+        loads.clear();
+        sent.clear();
+        for (const QString& c : {QStringLiteral("tx_profile_ex:FreeDV"),
+                                 QStringLiteral("tx_profile_ex:Nope"),
+                                 QStringLiteral("tx_profile_ex:Bad,Name")}) {
+            if (protocol.handleCommand(c) != freeDv) {
+                std::printf("      %s not answered with the current profile\n",
+                            qPrintable(c));
+                return false;
+            }
+        }
+        tx.setTransmitting(true);
+        const QString duringTx = protocol.handleCommand(QStringLiteral("tx_profile_ex:Default"));
+        tx.setTransmitting(false);
+        settle();
+        if (duringTx != freeDv || !loads.isEmpty() || !sent.isEmpty()) {
+            std::printf("      a SET during TX or a no-op changed something\n");
+            return false;
+        }
+
+        // The radio going away empties the list silently; when it is back
+        // the list and active profile are announced again.
+        tx.setProfileList({});
+        settle();
+        if (!sent.isEmpty()) {
+            std::printf("      an emptied list was announced\n");
+            return false;
+        }
+        tx.setProfileList({QStringLiteral("Default"), QStringLiteral("FreeDV")});
+        settle();
+        if (sent != QStringList{QStringLiteral("tx_profiles_ex:Default,FreeDV;"), freeDv}) {
+            std::printf("      a returning list was not announced: %s\n",
+                        qPrintable(sent.join(QLatin1Char(' '))));
+            return false;
+        }
+        return true;
+    }
+
     // Split made in the GUI (another slice holds TX) is reported as
     // split_enable on trx 0, and GUI RIT/XIT offset changes reach clients.
     static bool guiSplitAndRitOffsetReachClients()
@@ -3259,6 +3384,8 @@ int main(int argc, char** argv)
         = AetherSDR::TciServerReviewTest::guiSplitAndRitOffsetReachClients();
     const bool valueSeed
         = AetherSDR::TciServerReviewTest::valueRelaySeedsAfterRewire();
+    const bool txProfileEx
+        = AetherSDR::TciServerReviewTest::txProfileExListsSelectsAndBroadcasts();
 
     std::printf("%s  isolated settings profile\n",
                 validProfile ? "PASS" : "FAIL");
@@ -3361,6 +3488,8 @@ int main(int argc, char** argv)
                 guiSplit ? "PASS" : "FAIL");
     std::printf("%s  RIT/XIT offset and AGC relays seed once after a re-wire (#2824)\n",
                 valueSeed ? "PASS" : "FAIL");
+    std::printf("%s  tx_profiles_ex / tx_profile_ex list, select and follow the radio\n",
+                txProfileEx ? "PASS" : "FAIL");
 
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
@@ -3384,6 +3513,6 @@ int main(int argc, char** argv)
         && native24kPayload && fourIqStreams && sharedPanChannel
         && borrowRefused && iqRearms && iqClientScoped && txPermission && modePermission
         && chronoIdle && chronoCatchUp && daxRestored && initProtocol
-        && dsbMode && rxCtunEx && guiSplit && valueSeed
+        && dsbMode && rxCtunEx && guiSplit && valueSeed && txProfileEx
         ? 0 : 1;
 }

@@ -488,6 +488,15 @@ QString TciProtocol::generateInitBurst()
         burst += QStringLiteral("trx:%1,%2;").arg(txTrxIndex).arg(isTx ? "true" : "false");
         burst += QStringLiteral("tune:%1,%2;").arg(txTrxIndex).arg(tx.isTuning() ? "true" : "false");
 
+        // TX profiles (Thetis extension, see cmdTxProfileEx), only when the
+        // radio has a list: a backend without TX profiles stays silent here
+        // as it does to the GET.
+        const QStringList txProfiles = tx.profileList();
+        if (!txProfiles.isEmpty()) {
+            burst += txProfilesMessage(txProfiles);
+            burst += txProfileMessage(tx.activeProfile());
+        }
+
         // Master AF volume — whole-radio (no trx prefix), same saved value
         // cmdVolume's GET returns, reported in dB per the TCI spec
         // (-60..0; ExpertSDR3 wire scale). Without it the init burst seeds
@@ -648,8 +657,10 @@ QString TciProtocol::handleCommand(const QString& cmd)
     if (name == "tx_gain")          return cmdTxGain(args, isSet);
     if (name == "active_slice")     return cmdActiveSlice(args);
 
-    // Thetis extension, see cmdRxCtunEx
+    // Thetis extensions, see cmdRxCtunEx and cmdTxProfileEx
     if (name == "rx_ctun_ex")       return cmdRxCtunEx(args, isSet);
+    if (name == "tx_profiles_ex")   return cmdTxProfilesEx();
+    if (name == "tx_profile_ex")    return cmdTxProfileEx(args);
 
     // Unknown command — ignore silently per TCI spec
     return {};
@@ -1244,6 +1255,81 @@ QString TciProtocol::cmdRxCtunEx(const QStringList& args, bool isSet)
 
     m_pendingNotification = QStringLiteral("rx_ctun_ex:%1,%2;")
                                 .arg(trx).arg(ctun ? "true" : "false");
+    return {};
+}
+
+// ── TX_PROFILES_EX / TX_PROFILE_EX (Thetis extension) ──────────────────────
+//
+// Thetis's TX profile pair: `tx_profiles_ex;` answers the list as one comma
+// join, `tx_profile_ex;` the active profile, and `tx_profile_ex:<name>;`
+// selects one. TCI Remote switches profiles with these (FreeDV, FM) and puts
+// the operator's own back when it is done. The list is TransmitModel's: on
+// Flex the radio's `profile tx` list. A backend without TX profiles has an
+// empty list, and then neither command answers.
+//
+// A SET is not echoed here. The radio confirms the load in its status, and
+// TciServer broadcasts the new active profile then, so a load the radio
+// refuses never reads as done. A SET that cannot change anything (a name
+// not in the list, the profile already active, a TX in progress) is
+// answered with the active profile, so the client's mirror stays true.
+// A profile does not change under a transmission. As in Thetis, a name
+// with a comma cannot be selected: it arrives as two arguments, and the
+// list never offers one.
+
+static bool txProfileNameSendable(const QString& name)
+{
+    return !name.isEmpty() && !name.contains(QLatin1Char(','))
+        && !name.contains(QLatin1Char(';'));
+}
+
+QString TciProtocol::txProfilesMessage(const QStringList& profiles)
+{
+    QStringList names;
+    for (const QString& n : profiles) {
+        if (txProfileNameSendable(n)) names << n;
+    }
+    return QStringLiteral("tx_profiles_ex:%1;").arg(names.join(QLatin1Char(',')));
+}
+
+QString TciProtocol::txProfileMessage(const QString& active)
+{
+    return QStringLiteral("tx_profile_ex:%1;")
+        .arg(txProfileNameSendable(active) ? active : QString());
+}
+
+QString TciProtocol::cmdTxProfilesEx()
+{
+    if (!m_model) return {};
+    const QStringList profiles = m_model->transmitModel().profileList();
+    if (profiles.isEmpty()) return {};
+    return txProfilesMessage(profiles);
+}
+
+QString TciProtocol::cmdTxProfileEx(const QStringList& args)
+{
+    if (!m_model) return {};
+    auto& tx = m_model->transmitModel();
+    const QStringList profiles = tx.profileList();
+    if (profiles.isEmpty()) return {};
+    const QString active = tx.activeProfile();
+    const QString current = txProfileMessage(active);
+    if (args.size() != 1 || args.at(0).isEmpty()) return current;
+
+    // The radio's own spelling is what loads. An exact match wins over a
+    // case-insensitive one, for a list that holds both.
+    const QString& asked = args.at(0);
+    QString wanted;
+    for (const QString& n : profiles) {
+        if (n == asked) { wanted = n; break; }
+        if (wanted.isEmpty() && n.compare(asked, Qt::CaseInsensitive) == 0) wanted = n;
+    }
+    if (!txProfileNameSendable(wanted) || wanted == active || tx.isTransmitting()) {
+        return current;
+    }
+    QMetaObject::invokeMethod(m_model, [model = m_model, wanted]() {
+        auto& t = model->transmitModel();
+        if (!t.isTransmitting()) t.loadProfile(wanted);
+    }, Qt::QueuedConnection);
     return {};
 }
 

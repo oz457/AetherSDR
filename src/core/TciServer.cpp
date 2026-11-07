@@ -311,6 +311,20 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         m_lastTuneSent = m_model->transmitModel().isTuning();
         connect(&m_model->transmitModel(), &TransmitModel::tuneChanged,
                 this, &TciServer::scheduleTuneBroadcast);
+
+        // tx_profiles_ex / tx_profile_ex follow the radio (Thetis
+        // extension): a profile loaded in the GUI, by the radio, or as the
+        // radio's confirmation of a client's SET reaches every client.
+        // The active profile has no signal of its own, so stateChanged()
+        // schedules a look and only a different profile is sent.
+        m_lastTxProfilesSent =
+            TciProtocol::txProfilesMessage(m_model->transmitModel().profileList());
+        m_lastTxProfileSent =
+            TciProtocol::txProfileMessage(m_model->transmitModel().activeProfile());
+        connect(&m_model->transmitModel(), &TransmitModel::profileListChanged,
+                this, &TciServer::scheduleTxProfileBroadcast);
+        connect(&m_model->transmitModel(), &TransmitModel::stateChanged,
+                this, &TciServer::scheduleTxProfileBroadcast);
     }
 
     // Capture DAX RX stream creation responses so we can register them
@@ -3811,6 +3825,42 @@ void TciServer::scheduleTuneBroadcast()
     }
     m_tuneBroadcastQueued = true;
     QMetaObject::invokeMethod(this, &TciServer::broadcastTuneState, Qt::QueuedConnection);
+}
+
+// Posted, so a list and its active profile that change in one status burst
+// go out as one pair, list first.
+void TciServer::scheduleTxProfileBroadcast()
+{
+    if (m_txProfileBroadcastQueued) {
+        return;
+    }
+    m_txProfileBroadcastQueued = true;
+    QMetaObject::invokeMethod(this, &TciServer::broadcastTxProfiles, Qt::QueuedConnection);
+}
+
+void TciServer::broadcastTxProfiles()
+{
+    m_txProfileBroadcastQueued = false;
+    if (!m_model) {
+        return;
+    }
+    const auto& tx = m_model->transmitModel();
+    const QStringList profiles = tx.profileList();
+    const QString list = TciProtocol::txProfilesMessage(profiles);
+    const QString active = TciProtocol::txProfileMessage(tx.activeProfile());
+    const bool listMoved = list != std::exchange(m_lastTxProfilesSent, list);
+    const bool activeMoved = active != std::exchange(m_lastTxProfileSent, active);
+    // An emptied list (radio gone) is not announced; the init burst and
+    // the GETs say nothing then either. A list that comes back is new.
+    if (profiles.isEmpty()) {
+        return;
+    }
+    if (listMoved) {
+        broadcast(list);
+    }
+    if (listMoved || activeMoved) {
+        broadcast(active);
+    }
 }
 
 void TciServer::broadcastTuneState()
