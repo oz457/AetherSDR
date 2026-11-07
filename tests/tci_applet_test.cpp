@@ -6,6 +6,7 @@
 
 #include <QApplication>
 #include <QCheckBox>
+#include <QPushButton>
 #include <cstdio>
 
 using namespace AetherSDR;
@@ -33,11 +34,20 @@ int main(int argc, char** argv)
     TciServer server(&model);
     TciApplet applet;
     auto* lineOut = applet.findChild<QCheckBox*>(QStringLiteral("tciLineOutIncludeTx"));
+    auto* lineOutToggle = applet.findChild<QPushButton*>(QStringLiteral("tciLineOutToggle"));
     auto* lineOutConsent = applet.findChild<QCheckBox*>(QStringLiteral("tciLineOutPcAudioOffConsent"));
     const QString consentWarning = lineOutConsent
         ? lineOutConsent->accessibleDescription() : QString();
     applet.setRadioModel(&model);
     applet.setTciServer(&server);
+    if (lineOutToggle && lineOutToggle->isChecked()) { lineOutToggle->click(); }
+    check(lineOutToggle && lineOut && !lineOut->isVisibleTo(&applet)
+          && lineOutToggle->text().contains(QStringLiteral("Line Out recording"))
+          && !lineOutToggle->text().contains(QStringLiteral("on")),
+          "Line Out options sit in a closed drawer that says it is closed");
+    if (lineOutToggle) { lineOutToggle->click(); }
+    check(lineOut && lineOut->isVisibleTo(&applet),
+          "opening the Line Out drawer shows its options");
     check(lineOut && lineOut->text() == QStringLiteral("Include TX (Line Out)"),
           "Line Out TX control names its destination");
     check(lineOut && !lineOut->isChecked(), "Line Out TX inclusion defaults off");
@@ -60,6 +70,9 @@ int main(int argc, char** argv)
     server.setLineOutIncludeTx(true);
     check(server.lineOutIncludeTx() && lineOut && lineOut->isChecked(),
           "Line Out TX control mirrors the server setting");
+    if (lineOutToggle) { lineOutToggle->click(); }
+    check(lineOutToggle && lineOutToggle->text().endsWith(QStringLiteral("· on")),
+          "a closed drawer still says when a Line Out option is on");
     TciServer restored(&model);
     check(restored.lineOutIncludeTx(), "Line Out TX preference persists independently");
     server.setLineOutPcAudioOffConsent(true);
