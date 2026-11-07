@@ -28,10 +28,10 @@
 
 namespace AetherSDR {
 namespace {
-constexpr int kScaleMax = 256;      // IsFeedbackLevelOK's ceiling
-constexpr int kWindowLow = 128;     // FeedbackInRange: 128 < fb <= 181
+constexpr int kScaleMax = 256;      // calcc's level scale: 256 = hardware peak
+constexpr int kWindowLow = 128;     // target window: 128 < fb <= 181 (-6..-3 dB)
 constexpr int kWindowHigh = 181;
-constexpr int kAttMin = -28;        // MI0BOT: the HL2 goes negative
+constexpr int kAttMin = -28;        // below 0 is extra feedback gain (19 - att)
 constexpr int kAttMax = 31;
 
 // calcc.c's _calcc_state, in its order: what the status map's engineState is.
@@ -105,7 +105,7 @@ PureSignalFeedbackMeter::Band PureSignalFeedbackMeter::bandFor(int level) noexce
     if (level < 0) { return Band::None; }
     if (level > kWindowHigh) { return Band::High; }
     if (level > kWindowLow) { return Band::Good; }
-    if (level > 90) { return Band::Marginal; }
+    if (level > 90) { return Band::Marginal; }   // within 3 dB below the window
     return Band::Low;
 }
 
@@ -415,6 +415,7 @@ PureSignalView PureSignalView::fromFields(const QVariantMap& f, PureSignalView v
     i("calibrationCount", v.calibrationCount);
     i("engineState", v.engineState);
     i("attenuationDb", v.attenuationDb);
+    i("feedbackLimit", v.feedbackLimit);
     i("attMin", v.attMin);
     i("attMax", v.attMax);
     b("keyed", v.keyed);
@@ -566,6 +567,14 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         token = QStringLiteral("color.accent.warning");
     } else if (!s.enabled) {
         text = tr("Off — uses DDC 2 and 3 for feedback");
+    } else if (s.feedbackLimit > 0) {
+        // Before everything else: the HL2's receive input is overdriven.
+        text = tr("WARNING: too much RF feedback — this can damage your transceiver. "
+                  "Add an attenuator in the feedback path.");
+        token = QStringLiteral("color.accent.danger");
+    } else if (s.feedbackLimit < 0) {
+        text = tr("Feedback too weak at full gain — check the coupler or sampler");
+        token = QStringLiteral("color.accent.warning");
     } else if (s.correcting) {
         text = s.keyed ? tr("Correcting") : tr("Correction held — ready");
         token = QStringLiteral("color.accent.success");
