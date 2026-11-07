@@ -36,6 +36,7 @@ TCI was created by Expert Electronics for ExpertSDR3 and is now widely supported
 |---|---|
 | **RX1 … RX8** | One row per receive channel: the slice it carries, a logarithmic output level meter and a 0-100% receive gain slider. Rows above the radio's slice capacity are hidden. |
 | **TX** | Level meter and gain for transmit audio arriving from TCI clients. **Right-click** it to open **TX overflow handling** (see [TX overflow handling](#tx-overflow-handling)). |
+| **▸ Line Out recording** | Opens the two Line Out options below. They are for clients that record what you hear, such as contest loggers (DXLog); most TCI users do not need them. The drawer starts closed. When one of the options is on, the line reads **Line Out recording · on**, also while it is closed. |
 | **Include TX (Line Out)** | Includes TX monitor audio present in the radio speaker mix in the separate Line Out recording stream. PC Audio is optional. Off by default. |
 | **Line Out with PC Audio off** | Explicitly allows Line Out to keep the radio audio stream open when PC Audio is off. Off by default; this mutes the radio speaker, headphone and line-out outputs while a TCI client records. |
 | **Port:** | TCP port the server listens on. Default **50001**. |

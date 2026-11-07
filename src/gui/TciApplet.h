@@ -53,6 +53,8 @@ private:
 #ifdef HAVE_WEBSOCKETS
     void buildUI();
     void updateTciStatus();
+    void setLineOutExpanded(bool expanded);
+    void updateLineOutToggle();
 
     RadioModel* m_model{nullptr};
     TciServer*  m_tciServer{nullptr};
@@ -61,6 +63,8 @@ private:
     QPushButton* m_tciEnable{nullptr};
     QCheckBox* m_lineOutIncludeTx{nullptr};
     QCheckBox* m_lineOutPcAudioOffConsent{nullptr};
+    QPushButton* m_lineOutToggle{nullptr};   // "▸ Line Out recording" disclosure
+    QWidget*     m_lineOutDrawer{nullptr};   // holds the two Line Out options
     QPushButton* m_txVoiceDsp{nullptr};
     ControlAvailabilityRegistry* m_lineOutAvailability{nullptr};
     ControlAvailabilityRegistry* m_lineOutPcAudioOffAvailability{nullptr};

@@ -208,6 +208,30 @@ void TciApplet::buildUI()
         outer->addLayout(row);
     }
 
+    // The two Line Out options serve recording clients (contest loggers such
+    // as DXLog). Most TCI users never need them, so they sit in a drawer that
+    // starts closed; the disclosure line says when one of them is on.
+    m_lineOutToggle = new QPushButton(this);
+    m_lineOutToggle->setObjectName(QStringLiteral("tciLineOutToggle"));
+    m_lineOutToggle->setCheckable(true);
+    m_lineOutToggle->setFlat(true);
+    m_lineOutToggle->setAccessibleName(tr("Line Out recording options"));
+    m_lineOutToggle->setToolTip(tr(
+        "Options for clients that record what you hear, such as contest loggers "
+        "(DXLog). Most TCI users do not need them."));
+    applyCanonSheet(m_lineOutToggle, [] {
+        return QStringLiteral(
+            "QPushButton { color: {{color.canon.inkSoft}}; font-size: 11px; border: none;"
+            " background: transparent; text-align: left; padding: 1px 4px; }");
+    });
+    outer->addWidget(m_lineOutToggle);
+    m_lineOutDrawer = new QWidget(this);
+    m_lineOutDrawer->setObjectName(QStringLiteral("tciLineOutDrawer"));
+    auto* lineOutDrawer = new QVBoxLayout(m_lineOutDrawer);
+    lineOutDrawer->setContentsMargins(0, 0, 0, 0);
+    lineOutDrawer->setSpacing(0);
+    outer->addWidget(m_lineOutDrawer);
+
     auto* lineOutRow = new QHBoxLayout;
     lineOutRow->setContentsMargins(4, 2, 4, 2);
     m_lineOutIncludeTx = new QCheckBox(tr("Include TX (Line Out)"), this);
@@ -225,9 +249,10 @@ void TciApplet::buildUI()
     });
     lineOutRow->addWidget(m_lineOutIncludeTx);
     lineOutRow->addStretch();
-    outer->addLayout(lineOutRow);
+    lineOutDrawer->addLayout(lineOutRow);
     connect(m_lineOutIncludeTx, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_tciServer) { m_tciServer->setLineOutIncludeTx(enabled); }
+        updateLineOutToggle();
     });
     auto* lineOutConsentRow = new QHBoxLayout;
     lineOutConsentRow->setContentsMargins(4, 1, 4, 2);
@@ -248,10 +273,18 @@ void TciApplet::buildUI()
     });
     lineOutConsentRow->addWidget(m_lineOutPcAudioOffConsent);
     lineOutConsentRow->addStretch();
-    outer->addLayout(lineOutConsentRow);
+    lineOutDrawer->addLayout(lineOutConsentRow);
     connect(m_lineOutPcAudioOffConsent, &QCheckBox::toggled, this, [this](bool enabled) {
         if (m_tciServer) { m_tciServer->setLineOutPcAudioOffConsent(enabled); }
+        updateLineOutToggle();
     });
+    connect(m_lineOutToggle, &QPushButton::toggled, this, [this](bool expanded) {
+        setLineOutExpanded(expanded);
+        auto& ss = AppSettings::instance();
+        ss.setValue("TciLineOutExpanded", expanded ? "True" : "False");
+        ss.save();
+    });
+    setLineOutExpanded(settings.value("TciLineOutExpanded", "False").toString() == "True");
     // Full-width toggle, same look as the Enabled button; added below the
     // Port/Enable row so it sits with the other TCI audio routing toggle.
     auto* txDspRow = new QHBoxLayout;
@@ -535,6 +568,36 @@ void TciApplet::setRadioModel(RadioModel* model)
 #endif
 }
 
+void TciApplet::setLineOutExpanded(bool expanded)
+{
+#ifdef HAVE_WEBSOCKETS
+    {
+        const QSignalBlocker blocker(m_lineOutToggle);
+        m_lineOutToggle->setChecked(expanded);
+    }
+    m_lineOutDrawer->setVisible(expanded);
+    m_lineOutToggle->setAccessibleDescription(expanded ? tr("Expanded") : tr("Collapsed"));
+    updateLineOutToggle();
+#else
+    (void)expanded;
+#endif
+}
+
+void TciApplet::updateLineOutToggle()
+{
+#ifdef HAVE_WEBSOCKETS
+    if (!m_lineOutToggle) { return; }
+    const bool on = (m_lineOutIncludeTx && m_lineOutIncludeTx->isChecked())
+        || (m_lineOutPcAudioOffConsent && m_lineOutPcAudioOffConsent->isChecked());
+    // A closed drawer must not hide an option that is on: the consent mutes
+    // the radio's own outputs.
+    QString text = (m_lineOutToggle->isChecked() ? QStringLiteral("▾ ") : QStringLiteral("▸ "))
+        + tr("Line Out recording");
+    if (on) { text += QStringLiteral(" · ") + tr("on"); }
+    m_lineOutToggle->setText(text);
+#endif
+}
+
 void TciApplet::setTciServer(TciServer* tci)
 {
 #ifdef HAVE_WEBSOCKETS
@@ -559,6 +622,7 @@ void TciApplet::setTciServer(TciServer* tci)
     }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
+    updateLineOutToggle();
     if (tci) {
         connect(tci, &TciServer::txVoiceDspChanged, this, [this](bool on) {
             const QSignalBlocker blocker(m_txVoiceDsp);
@@ -568,6 +632,7 @@ void TciApplet::setTciServer(TciServer* tci)
             const QSignalBlocker blocker(m_lineOutIncludeTx);
             m_lineOutIncludeTx->setChecked(enabled);
             if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
+            updateLineOutToggle();
         });
         connect(tci, &TciServer::lineOutPcAudioOffConsentChanged, this, [this](bool enabled) {
             const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
@@ -575,6 +640,7 @@ void TciApplet::setTciServer(TciServer* tci)
             if (m_lineOutPcAudioOffAvailability) {
                 m_lineOutPcAudioOffAvailability->refreshEngaged();
             }
+            updateLineOutToggle();
         });
         connect(tci, &TciServer::clientCountChanged,
                 this, [this]() { updateTciStatus(); });
