@@ -17,6 +17,7 @@
 #include "QsoRecorder.h"          // record() verb — Client-Side QSO recorder
 #include "CallsignLookupService.h" // qrz() verb — QRZ lookup cache/service
 #include "CallsignUtils.h"
+#include "models/ClientNrSettingsModel.h"
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"   // RadioModel, SliceModel, PanadapterModel (get())
 #include "core/backends/IRadioBackend.h"   // backend()->invokeExtension (sim faults)
@@ -5104,9 +5105,8 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
         QJsonObject data = dspSnapshotOnObjectThread(audio, &snapshotOk);
         if (!snapshotOk)
             return err(QStringLiteral("dsp snapshot unavailable"));
-        // Merge client-side DSP tuning state. NR2 owns one versioned settings
-        // object; the remaining DSPs still use their established keys.
-        AppSettings& s = AppSettings::instance();
+        // Merge client-side DSP tuning state from the settings models: NR2
+        // has its own, NR4 / MNR / DFNR share ClientNrSettingsModel.
         const Nr2SettingsModel::Config nr2 =
             Nr2SettingsModel::instance().config();
         QJsonObject tuning = data.value(QStringLiteral("tuning")).toObject();
@@ -5119,19 +5119,19 @@ QJsonObject AutomationServer::doGet(const QString& model, const QString& selecto
             {QStringLiteral("npeMethod"), nr2.npeMethod},
             {QStringLiteral("aeFilter"), nr2.aeFilter},
         };
+        const ClientNrSettingsModel::Config clientNr =
+            ClientNrSettingsModel::instance().config();
         tuning[QStringLiteral("nr4")] = QJsonObject{
-            {QStringLiteral("reductionDb"),  s.value("NR4ReductionAmount", "100").toFloat()},
-            {QStringLiteral("smoothing"),    s.value("NR4SmoothingFactor", "0").toFloat()},
-            {QStringLiteral("whitening"),    s.value("NR4WhiteningFactor", "0").toFloat()},
-            {QStringLiteral("maskingDepth"), s.value("NR4MaskingDepth", "50").toFloat()},
-            {QStringLiteral("suppression"),  s.value("NR4SuppressionStrength", "50").toFloat()},
-            {QStringLiteral("noiseMethod"),  s.value("NR4NoiseEstimationMethod", "0").toInt()},
-            {QStringLiteral("adaptiveNoise"),
-                s.value("NR4AdaptiveNoise", "True").toString() == QLatin1String("True")},
+            {QStringLiteral("reductionDb"),  clientNr.nr4ReductionDb},
+            {QStringLiteral("smoothing"),    clientNr.nr4SmoothingPercent},
+            {QStringLiteral("whitening"),    clientNr.nr4WhiteningPercent},
+            {QStringLiteral("maskingDepth"), clientNr.nr4MaskingDepth},
+            {QStringLiteral("suppression"),  clientNr.nr4SuppressionStrength},
+            {QStringLiteral("noiseMethod"),  clientNr.nr4NoiseMethod},
+            {QStringLiteral("adaptiveNoise"), clientNr.nr4AdaptiveNoise},
         };
         QJsonObject dfnr = tuning.value(QStringLiteral("dfnr")).toObject();
-        dfnr[QStringLiteral("postFilterBeta")] =
-            s.value("DfnrPostFilterBeta", "0.0").toFloat();
+        dfnr[QStringLiteral("postFilterBeta")] = clientNr.dfnrPostFilterBeta;
         tuning[QStringLiteral("dfnr")] = dfnr;
         data[QStringLiteral("tuning")] = tuning;
         // The BACKEND's DSP configuration, as opposed to the client-side chain in `data`,

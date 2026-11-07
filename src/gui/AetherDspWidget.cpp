@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/NnrSettings.h"
 #include "core/NvidiaBnrSettings.h"
+#include "models/ClientNrSettingsModel.h"
 #include "models/Nr2SettingsModel.h"
 #include "models/Rn2SettingsModel.h"
 #include "GuardedSlider.h"
@@ -423,6 +424,10 @@ AetherDspWidget::AetherDspWidget(AudioEngine* audio, QWidget* parent)
     connect(&Nr2SettingsModel::instance(),
             &Nr2SettingsModel::configChanged,
             this, &AetherDspWidget::syncNr2Settings);
+    // The popups write the same model; follow them without re-emitting.
+    connect(&ClientNrSettingsModel::instance(),
+            &ClientNrSettingsModel::configChanged,
+            this, [this]() { syncClientNrSettings(/*silent=*/true); });
 
     syncDspSelectorFromEngine();
     syncFromEngine();
@@ -1270,9 +1275,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         row->addStretch(1);
         m_nr4MethodGroup->button(0)->setChecked(true);
         connect(m_nr4MethodGroup, &QButtonGroup::idClicked, this, [this](int id) {
-            auto& s = AppSettings::instance();
-            s.setValue("NR4NoiseEstimationMethod", QString::number(id));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4NoiseMethod(id);
             emit nr4NoiseMethodChanged(id);
         });
         cellBox->addLayout(row);
@@ -1285,9 +1288,7 @@ QWidget* AetherDspWidget::buildNr4Page()
     m_nr4AdaptiveCheck->setToolTip("Continuously re-estimates the noise floor as conditions change. Disable for stable environments.");
     m_nr4AdaptiveCheck->setChecked(true);
     connect(m_nr4AdaptiveCheck, &QCheckBox::toggled, this, [this](bool on) {
-        auto& s = AppSettings::instance();
-        s.setValue("NR4AdaptiveNoise", on ? "True" : "False");
-        s.save();
+        ClientNrSettingsModel::instance().setNr4AdaptiveNoise(on);
         emit nr4AdaptiveNoiseChanged(on);
     });
     {
@@ -1328,9 +1329,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         connect(m_nr4ReductionSlider, &QSlider::valueChanged, this, [this](int v) {
             float val = v / 10.0f;
             m_nr4ReductionLabel->setText(QString::number(val, 'f', 1));
-            auto& s = AppSettings::instance();
-            s.setValue("NR4ReductionAmount", QString::number(val, 'f', 1));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4ReductionDb(val);
             emit nr4ReductionChanged(val);
         });
         ++row;
@@ -1352,9 +1351,8 @@ QWidget* AetherDspWidget::buildNr4Page()
         sliderGrid->addWidget(m_nr4SmoothingLabel, row, 2);
         connect(m_nr4SmoothingSlider, &QSlider::valueChanged, this, [this](int v) {
             m_nr4SmoothingLabel->setText(QString::number(v));
-            auto& s = AppSettings::instance();
-            s.setValue("NR4SmoothingFactor", QString::number(static_cast<float>(v), 'f', 1));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4SmoothingPercent(
+                static_cast<float>(v));
             emit nr4SmoothingChanged(static_cast<float>(v));
         });
         ++row;
@@ -1376,9 +1374,8 @@ QWidget* AetherDspWidget::buildNr4Page()
         sliderGrid->addWidget(m_nr4WhiteningLabel, row, 2);
         connect(m_nr4WhiteningSlider, &QSlider::valueChanged, this, [this](int v) {
             m_nr4WhiteningLabel->setText(QString::number(v));
-            auto& s = AppSettings::instance();
-            s.setValue("NR4WhiteningFactor", QString::number(static_cast<float>(v), 'f', 1));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4WhiteningPercent(
+                static_cast<float>(v));
             emit nr4WhiteningChanged(static_cast<float>(v));
         });
         ++row;
@@ -1401,9 +1398,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         connect(m_nr4MaskingSlider, &QSlider::valueChanged, this, [this](int v) {
             float val = v / 100.0f;
             m_nr4MaskingLabel->setText(QString::number(val, 'f', 2));
-            auto& s = AppSettings::instance();
-            s.setValue("NR4MaskingDepth", QString::number(val, 'f', 2));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4MaskingDepth(val);
             emit nr4MaskingDepthChanged(val);
         });
         ++row;
@@ -1426,9 +1421,7 @@ QWidget* AetherDspWidget::buildNr4Page()
         connect(m_nr4SuppressionSlider, &QSlider::valueChanged, this, [this](int v) {
             float val = v / 100.0f;
             m_nr4SuppressionLabel->setText(QString::number(val, 'f', 2));
-            auto& s = AppSettings::instance();
-            s.setValue("NR4SuppressionStrength", QString::number(val, 'f', 2));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4SuppressionStrength(val);
             emit nr4SuppressionChanged(val);
         });
         ++row;
@@ -1497,9 +1490,7 @@ QWidget* AetherDspWidget::buildMnrPage()
         connect(m_mnrStrengthSlider, &QSlider::valueChanged, this, [this](int value) {
             float normalized = value / 100.0f;
             m_mnrStrengthLabel->setText(QString::number(value) + "%");
-            auto& s = AppSettings::instance();
-            s.setValue("MnrStrength", QString::number(normalized, 'f', 2));
-            s.save();
+            ClientNrSettingsModel::instance().setMnrStrength(normalized);
             emit mnrStrengthChanged(normalized);
         });
     }
@@ -2283,7 +2274,8 @@ QWidget* AetherDspWidget::buildDfnrPage()
     auto* grid = new QGridLayout;
     grid->setColumnStretch(1, 1);
 
-    auto& s = AppSettings::instance();
+    const ClientNrSettingsModel::Config nrConfig =
+        ClientNrSettingsModel::instance().config();
 
     auto* info = new QLabel("AI-powered speech enhancement — higher fidelity than RNNoise "
                             "in high-noise HF environments. CPU-only, 10 ms latency, 48 kHz.");
@@ -2324,7 +2316,8 @@ QWidget* AetherDspWidget::buildDfnrPage()
     m_dfnrAttenSlider->setAccessibleDescription(
         tr("Maximum noise attenuation in dB for DeepFilterNet noise reduction."));
     m_dfnrAttenSlider->setRange(0, 100);
-    m_dfnrAttenSlider->setValue(static_cast<int>(s.value("DfnrAttenLimit", "100").toFloat()));
+    m_dfnrAttenSlider->setValue(
+        static_cast<int>(std::lround(nrConfig.dfnrAttenLimitDb)));
     applyChromeSliderStyle(m_dfnrAttenSlider);
     m_dfnrAttenSlider->setToolTip("Maximum noise attenuation in dB.\n"
                                    "0 dB = passthrough (no denoising)\n"
@@ -2353,9 +2346,7 @@ QWidget* AetherDspWidget::buildDfnrPage()
     connect(m_dfnrAttenSlider, &QSlider::valueChanged, this, [this](int v) {
         m_dfnrAttenLabel->setText(QString::number(v));
         float db = static_cast<float>(v);
-        auto& s = AppSettings::instance();
-        s.setValue("DfnrAttenLimit", QString::number(db, 'f', 0));
-        s.save();
+        ClientNrSettingsModel::instance().setDfnrAttenLimitDb(db);
         emit dfnrAttenLimitChanged(db);
     });
 
@@ -2367,7 +2358,8 @@ QWidget* AetherDspWidget::buildDfnrPage()
     m_dfnrBetaSlider->setAccessibleDescription(
         tr("Post-filter strength for DeepFilterNet noise reduction."));
     m_dfnrBetaSlider->setRange(0, 30);
-    m_dfnrBetaSlider->setValue(static_cast<int>(s.value("DfnrPostFilterBeta", "0.0").toFloat() * 100));
+    m_dfnrBetaSlider->setValue(
+        static_cast<int>(std::lround(nrConfig.dfnrPostFilterBeta * 100.0f)));
     applyChromeSliderStyle(m_dfnrBetaSlider);
     m_dfnrBetaSlider->setToolTip("Post-filter strength for additional noise suppression.\n"
                                   "0 = disabled (default)\n"
@@ -2394,9 +2386,7 @@ QWidget* AetherDspWidget::buildDfnrPage()
     connect(m_dfnrBetaSlider, &QSlider::valueChanged, this, [this](int v) {
         float beta = v / 100.0f;
         m_dfnrBetaLabel->setText(QString::number(beta, 'f', 2));
-        auto& s = AppSettings::instance();
-        s.setValue("DfnrPostFilterBeta", QString::number(beta, 'f', 2));
-        s.save();
+        ClientNrSettingsModel::instance().setDfnrPostFilterBeta(beta);
         emit dfnrPostFilterBetaChanged(beta);
     });
 
@@ -2510,53 +2500,83 @@ void AetherDspWidget::syncFromEngine()
 {
     syncDspSelectorFromEngine();
     syncNr2Settings();
+    // Not silent, as before the model: a control that moves here still
+    // tells the engine, and the model write is a no-op for the same value.
+    syncClientNrSettings(/*silent=*/false);
+}
 
-    auto& s = AppSettings::instance();
+// NR4, MNR and DFNR controls from ClientNrSettingsModel. Silent when the
+// change came from elsewhere (a popup): whoever wrote the model has already
+// told the engine, and re-emitting would write the value straight back.
+void AetherDspWidget::syncClientNrSettings(bool silent)
+{
+    const ClientNrSettingsModel::Config c =
+        ClientNrSettingsModel::instance().config();
 
+    const auto setSlider = [silent](QSlider* slider, QLabel* label,
+                                    int value, const QString& text) {
+        if (!slider) {
+            return;
+        }
+        {
+            const QSignalBlocker blocker(silent ? slider : nullptr);
+            slider->setValue(value);
+        }
+        if (label) {
+            label->setText(text);
+        }
+    };
+
+    // MNR stays blocked either way, as it always was: the engine restores
+    // its strength from the model when MNR is switched on.
     if (m_mnrStrengthSlider) {
-        { QSignalBlocker sb(m_mnrStrengthSlider);
-          int strength = static_cast<int>(m_audio->mnrStrength() * 100.0f);
-          m_mnrStrengthSlider->setValue(strength);
-          m_mnrStrengthLabel->setText(QString::number(strength) + "%"); }
+        const QSignalBlocker blocker(m_mnrStrengthSlider);
+        const int strength =
+            static_cast<int>(std::lround(c.mnrStrength * 100.0f));
+        m_mnrStrengthSlider->setValue(strength);
+        m_mnrStrengthLabel->setText(QString::number(strength) + "%");
     }
 
-    int noiseMethod = s.value("NR4NoiseEstimationMethod", "0").toInt();
-    if (auto* btn = m_nr4MethodGroup->button(noiseMethod))
-        btn->setChecked(true);
-
-    bool adaptive = s.value("NR4AdaptiveNoise", "True").toString() == "True";
-    m_nr4AdaptiveCheck->setChecked(adaptive);
-
-    int reduction = static_cast<int>(s.value("NR4ReductionAmount", "10.0").toFloat() * 10);
-    m_nr4ReductionSlider->setValue(reduction);
-    m_nr4ReductionLabel->setText(QString::number(reduction / 10.0f, 'f', 1));
-
-    int smoothing = static_cast<int>(s.value("NR4SmoothingFactor", "0.0").toFloat());
-    m_nr4SmoothingSlider->setValue(smoothing);
-    m_nr4SmoothingLabel->setText(QString::number(smoothing));
-
-    int whitening = static_cast<int>(s.value("NR4WhiteningFactor", "0.0").toFloat());
-    m_nr4WhiteningSlider->setValue(whitening);
-    m_nr4WhiteningLabel->setText(QString::number(whitening));
-
-    int masking = static_cast<int>(s.value("NR4MaskingDepth", "0.50").toFloat() * 100);
-    m_nr4MaskingSlider->setValue(masking);
-    m_nr4MaskingLabel->setText(QString::number(masking / 100.0f, 'f', 2));
-
-    int suppression = static_cast<int>(s.value("NR4SuppressionStrength", "0.50").toFloat() * 100);
-    m_nr4SuppressionSlider->setValue(suppression);
-    m_nr4SuppressionLabel->setText(QString::number(suppression / 100.0f, 'f', 2));
-
-    if (m_dfnrAttenSlider) {
-        int atten = static_cast<int>(s.value("DfnrAttenLimit", "100").toFloat());
-        m_dfnrAttenSlider->setValue(atten);
-        m_dfnrAttenLabel->setText(QString::number(atten));
+    if (m_nr4MethodGroup) {
+        if (auto* btn = m_nr4MethodGroup->button(c.nr4NoiseMethod)) {
+            const QSignalBlocker blocker(silent ? btn : nullptr);
+            btn->setChecked(true);
+        }
     }
-    if (m_dfnrBetaSlider) {
-        int beta = static_cast<int>(s.value("DfnrPostFilterBeta", "0.0").toFloat() * 100);
-        m_dfnrBetaSlider->setValue(beta);
-        m_dfnrBetaLabel->setText(QString::number(beta / 100.0f, 'f', 2));
+    if (m_nr4AdaptiveCheck) {
+        const QSignalBlocker blocker(silent ? m_nr4AdaptiveCheck : nullptr);
+        m_nr4AdaptiveCheck->setChecked(c.nr4AdaptiveNoise);
     }
+
+    const int reduction =
+        static_cast<int>(std::lround(c.nr4ReductionDb * 10.0f));
+    setSlider(m_nr4ReductionSlider, m_nr4ReductionLabel, reduction,
+              QString::number(reduction / 10.0f, 'f', 1));
+    const int smoothing =
+        static_cast<int>(std::lround(c.nr4SmoothingPercent));
+    setSlider(m_nr4SmoothingSlider, m_nr4SmoothingLabel, smoothing,
+              QString::number(smoothing));
+    const int whitening =
+        static_cast<int>(std::lround(c.nr4WhiteningPercent));
+    setSlider(m_nr4WhiteningSlider, m_nr4WhiteningLabel, whitening,
+              QString::number(whitening));
+    const int masking =
+        static_cast<int>(std::lround(c.nr4MaskingDepth * 100.0f));
+    setSlider(m_nr4MaskingSlider, m_nr4MaskingLabel, masking,
+              QString::number(masking / 100.0f, 'f', 2));
+    const int suppression =
+        static_cast<int>(std::lround(c.nr4SuppressionStrength * 100.0f));
+    setSlider(m_nr4SuppressionSlider, m_nr4SuppressionLabel, suppression,
+              QString::number(suppression / 100.0f, 'f', 2));
+
+    const int atten = static_cast<int>(std::lround(c.dfnrAttenLimitDb));
+    setSlider(m_dfnrAttenSlider, m_dfnrAttenLabel, atten,
+              QString::number(atten));
+    const int beta =
+        static_cast<int>(std::lround(c.dfnrPostFilterBeta * 100.0f));
+    setSlider(m_dfnrBetaSlider, m_dfnrBetaLabel, beta,
+              QString::number(beta / 100.0f, 'f', 2));
+
     // Last, so the reading reflects every control this pass just moved.
     refreshStatusStrip();
 }

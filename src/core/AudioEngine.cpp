@@ -36,6 +36,7 @@
 #include "OpusCodec.h"
 #include "ReceivePresentationSync.h"
 #include "SpectralNR.h"
+#include "models/ClientNrSettingsModel.h"
 #include "models/Nr2SettingsModel.h"
 #include "models/Rn2SettingsModel.h"
 #ifdef HAVE_SPECBLEACH
@@ -115,12 +116,12 @@ static void applyNr2Settings(SpectralNR& nr2);
 static void copyNr2Settings(const SpectralNR& source, SpectralNR& target);
 static void applyRn2Settings(RNNoiseFilter& rn2);
 #ifdef HAVE_SPECBLEACH
-static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4);
+static void applyNr4SettingsFromModel(SpecbleachFilter& nr4);
 static void copyNr4Settings(const SpecbleachFilter& source,
                             SpecbleachFilter& target);
 #endif
 #ifdef HAVE_DFNR
-static void applyDfnrSettingsFromAppSettings(DeepFilterFilter& dfnr);
+static void applyDfnrSettingsFromModel(DeepFilterFilter& dfnr);
 static void copyDfnrSettings(const DeepFilterFilter& source,
                              DeepFilterFilter& target);
 #endif
@@ -1617,7 +1618,7 @@ void AudioEngine::resetLegacyKiwiDspState()
     if (m_nr4Enabled && m_kiwiSdrNr4) {
         m_kiwiSdrNr4 = createNr4Filter(QStringLiteral("Kiwi epoch"));
         if (m_kiwiSdrNr4) {
-            applyNr4SettingsFromAppSettings(*m_kiwiSdrNr4);
+            applyNr4SettingsFromModel(*m_kiwiSdrNr4);
         }
     }
 #endif
@@ -1684,7 +1685,7 @@ void AudioEngine::resetExternalKiwiDspState(ExternalRxAudioSourceState& source)
     if (m_nr4Enabled && source.nr4) {
         source.nr4 = createNr4Filter(QStringLiteral("Kiwi epoch"));
         if (source.nr4) {
-            applyNr4SettingsFromAppSettings(*source.nr4);
+            applyNr4SettingsFromModel(*source.nr4);
         }
     }
 #endif
@@ -3809,7 +3810,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
             }
             return completedAutomationDspProbe(requestedMode, input, []() {
                 auto nr4 = std::make_shared<SpecbleachFilter>();
-                applyNr4SettingsFromAppSettings(*nr4);
+                applyNr4SettingsFromModel(*nr4);
                 return AutomationDspProcess(
                     [nr4](const QByteArray& block) { return nr4->process(block); });
             });
@@ -3847,7 +3848,7 @@ QJsonObject AudioEngine::automationDspStereoProbe(const QString& mode) const
             }
             return completedAutomationDspProbe(requestedMode, input, []() {
                 auto dfnr = std::make_shared<DeepFilterFilter>();
-                applyDfnrSettingsFromAppSettings(*dfnr);
+                applyDfnrSettingsFromModel(*dfnr);
                 return AutomationDspProcess(
                     [dfnr](const QByteArray& block) { return dfnr->process(block); });
             });
@@ -4904,7 +4905,7 @@ bool AudioEngine::prepareMainPcmDsp()
     if (m_nr4Enabled) {
         m_nr4 = createNr4Filter(QStringLiteral("main RX"), rate);
         if (m_nr4) {
-            applyNr4SettingsFromAppSettings(*m_nr4);
+            applyNr4SettingsFromModel(*m_nr4);
         }
     }
 #endif
@@ -4920,7 +4921,7 @@ bool AudioEngine::prepareMainPcmDsp()
     if (m_dfnrEnabled) {
         m_dfnr = createDfnrFilter(QStringLiteral("main RX"), rate);
         if (m_dfnr) {
-            applyDfnrSettingsFromAppSettings(*m_dfnr);
+            applyDfnrSettingsFromModel(*m_dfnr);
         }
     }
 #endif
@@ -5599,7 +5600,7 @@ void AudioEngine::resetRxChainStateForSourceSwitch()
     if (m_nr4Enabled && m_kiwiSdrNr4) {
         m_kiwiSdrNr4 = createNr4Filter(QStringLiteral("Kiwi epoch"));
         if (m_kiwiSdrNr4) {
-            applyNr4SettingsFromAppSettings(*m_kiwiSdrNr4);
+            applyNr4SettingsFromModel(*m_kiwiSdrNr4);
         }
     }
 #endif
@@ -7642,17 +7643,17 @@ static void copyNr2Settings(const SpectralNR& source, SpectralNR& target)
 }
 
 #ifdef HAVE_SPECBLEACH
-static void applyNr4SettingsFromAppSettings(SpecbleachFilter& nr4)
+static void applyNr4SettingsFromModel(SpecbleachFilter& nr4)
 {
-    auto& s = AppSettings::instance();
-    nr4.setReductionAmount(s.value("NR4ReductionAmount", "10.0").toFloat());
-    nr4.setSmoothingFactor(s.value("NR4SmoothingFactor", "0.0").toFloat());
-    nr4.setWhiteningFactor(s.value("NR4WhiteningFactor", "0.0").toFloat());
-    nr4.setAdaptiveNoise(s.value("NR4AdaptiveNoise", "True").toString() == "True");
-    nr4.setNoiseEstimationMethod(s.value("NR4NoiseEstimationMethod", "0").toInt());
-    nr4.setMaskingDepth(s.value("NR4MaskingDepth", "0.50").toFloat());
-    nr4.setSuppressionStrength(
-        s.value("NR4SuppressionStrength", "0.50").toFloat());
+    const ClientNrSettingsModel::Config c =
+        ClientNrSettingsModel::instance().config();
+    nr4.setReductionAmount(c.nr4ReductionDb);
+    nr4.setSmoothingFactor(c.nr4SmoothingPercent);
+    nr4.setWhiteningFactor(c.nr4WhiteningPercent);
+    nr4.setAdaptiveNoise(c.nr4AdaptiveNoise);
+    nr4.setNoiseEstimationMethod(c.nr4NoiseMethod);
+    nr4.setMaskingDepth(c.nr4MaskingDepth);
+    nr4.setSuppressionStrength(c.nr4SuppressionStrength);
 }
 
 static void copyNr4Settings(const SpecbleachFilter& source,
@@ -7669,11 +7670,12 @@ static void copyNr4Settings(const SpecbleachFilter& source,
 #endif
 
 #ifdef HAVE_DFNR
-static void applyDfnrSettingsFromAppSettings(DeepFilterFilter& dfnr)
+static void applyDfnrSettingsFromModel(DeepFilterFilter& dfnr)
 {
-    auto& s = AppSettings::instance();
-    dfnr.setAttenLimit(s.value("DfnrAttenLimit", "100").toFloat());
-    dfnr.setPostFilterBeta(s.value("DfnrPostFilterBeta", "0.0").toFloat());
+    const ClientNrSettingsModel::Config c =
+        ClientNrSettingsModel::instance().config();
+    dfnr.setAttenLimit(c.dfnrAttenLimitDb);
+    dfnr.setPostFilterBeta(c.dfnrPostFilterBeta);
 }
 
 static void copyDfnrSettings(const DeepFilterFilter& source,
@@ -8045,7 +8047,7 @@ void AudioEngine::setNr4Enabled(bool on)
             emit nr4EnabledChanged(false);
             return;
         }
-        applyNr4SettingsFromAppSettings(*m_nr4);
+        applyNr4SettingsFromModel(*m_nr4);
         m_nr4Enabled = true;
     } else {
         m_nr4Enabled = false;
@@ -8200,9 +8202,10 @@ void AudioEngine::setMnrEnabled(bool on)
         if (m_dfnrEnabled) setDfnrEnabled(false);
         if (m_nvAfxEnabled) setNvAfxEnabled(false);
         if (m_nnrEnabled)  setNnrEnabled(false);
-        // Restore strength from settings (default 1.0 = full suppression)
-        m_mnrStrength.store(std::clamp(
-            AppSettings::instance().value("MnrStrength", "1.00").toFloat(), 0.0f, 1.0f));
+        // Restore strength from the model (default 1.0 = full suppression;
+        // the model clamps).
+        m_mnrStrength.store(
+            ClientNrSettingsModel::instance().config().mnrStrength);
         m_mnr = createMnrFilter(QStringLiteral("Flex"), m_rxProducerRate.load());
         if (!m_mnr) {
             m_mnr.reset();
@@ -8230,9 +8233,9 @@ void AudioEngine::setMnrEnabled(bool on)
 
 void AudioEngine::setMnrStrength(float normalized)
 {
+    // Persisting is the caller's job (ClientNrSettingsModel): this runs on
+    // the audio thread and only applies the value.
     m_mnrStrength.store(std::clamp(normalized, 0.0f, 1.0f));
-    AppSettings::instance().setValue("MnrStrength",
-        QString::number(m_mnrStrength.load(), 'f', 2));
 #ifdef __APPLE__
     std::lock_guard<std::recursive_mutex> lock(m_dspMutex);
     if (m_mnr) {
@@ -8506,7 +8509,7 @@ void AudioEngine::setDfnrEnabled(bool on)
             emit dfnrEnabledChanged(false);
             return;
         }
-        applyDfnrSettingsFromAppSettings(*m_dfnr);
+        applyDfnrSettingsFromModel(*m_dfnr);
         m_dfnrEnabled = true;
     } else {
         m_dfnrEnabled = false;

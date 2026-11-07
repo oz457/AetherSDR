@@ -2800,6 +2800,18 @@ target_link_libraries(rn2_settings_model_test PRIVATE Qt6::Core Qt6::Test)
 set_target_properties(rn2_settings_model_test PROPERTIES AUTOMOC ON)
 add_test(NAME rn2_settings_model_test COMMAND rn2_settings_model_test)
 
+# NR4 / MNR / DFNR parameters: migration from the flat keys, clamping,
+# persistence and change signalling of ClientNrSettingsModel.
+add_executable(client_nr_settings_model_test
+    tests/client_nr_settings_model_test.cpp
+    src/models/ClientNrSettingsModel.cpp
+    $<TARGET_OBJECTS:aether_test_settings>
+)
+target_include_directories(client_nr_settings_model_test PRIVATE src tests)
+target_link_libraries(client_nr_settings_model_test PRIVATE Qt6::Core Qt6::Test)
+set_target_properties(client_nr_settings_model_test PROPERTIES AUTOMOC ON)
+add_test(NAME client_nr_settings_model_test COMMAND client_nr_settings_model_test)
+
 set_tests_properties(app_settings_safety_explicit-profile-path-isolation
     PROPERTIES SKIP_RETURN_CODE 77)
 
@@ -10805,6 +10817,7 @@ set(AETHER_SETTINGS_CONSUMERS
     nr2_settings_model_test
     nr2_tx_rx_reset_test
     rn2_settings_model_test
+    client_nr_settings_model_test
     panadapter_model_rx_antenna_test
     qso_recorder_write_error_test
     qso_recorder_slice_lifetime_test

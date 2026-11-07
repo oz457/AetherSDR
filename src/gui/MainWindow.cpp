@@ -61,6 +61,7 @@
 #include "models/PanadapterModel.h"
 #include "models/RadioStatusOwnership.h"
 #include "models/ReceiverSlotCount.h"
+#include "models/ClientNrSettingsModel.h"
 #include "models/Nr2SettingsModel.h"
 #include "PanZoomModeGate.h"
 #include "ClientFftSmoothingGate.h"
@@ -10918,58 +10919,50 @@ void MainWindow::showNr2ParamPopup(const QPoint& globalPos)
 
 void MainWindow::showNr4ParamPopup(const QPoint& globalPos)
 {
-    auto& s = AppSettings::instance();
+    auto& model = ClientNrSettingsModel::instance();
+    const ClientNrSettingsModel::Config cfg = model.config();
     auto* popup = new DspParamPopup(this);
 
     popup->addSlider("Reduction (dB)", 0, 400,
-        static_cast<int>(s.value("NR4ReductionAmount", "10.0").toFloat() * 10),
+        static_cast<int>(std::lround(cfg.nr4ReductionDb * 10.0f)),
         [](int v) { return QString::number(v / 10.0f, 'f', 1); },
         [this](int v) {
             float val = v / 10.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("NR4ReductionAmount", QString::number(val, 'f', 1));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4ReductionDb(val);
             QMetaObject::invokeMethod(m_audio, [this, val]() { m_audio->setNr4ReductionAmount(val); });
         });
 
     popup->addSlider("Smoothing (%)", 0, 100,
-        static_cast<int>(s.value("NR4SmoothingFactor", "0.0").toFloat()),
+        static_cast<int>(std::lround(cfg.nr4SmoothingPercent)),
         [](int v) { return QString::number(v); },
         [this](int v) {
-            auto& s = AppSettings::instance();
-            s.setValue("NR4SmoothingFactor", QString::number(static_cast<float>(v), 'f', 1));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4SmoothingPercent(
+                static_cast<float>(v));
             QMetaObject::invokeMethod(m_audio, [this, v]() { m_audio->setNr4SmoothingFactor(static_cast<float>(v)); });
         });
 
     popup->addSlider("Masking Depth", 0, 100,
-        static_cast<int>(s.value("NR4MaskingDepth", "0.50").toFloat() * 100),
+        static_cast<int>(std::lround(cfg.nr4MaskingDepth * 100.0f)),
         [](int v) { return QString::number(v / 100.0f, 'f', 2); },
         [this](int v) {
             float val = v / 100.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("NR4MaskingDepth", QString::number(val, 'f', 2));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4MaskingDepth(val);
             QMetaObject::invokeMethod(m_audio, [this, val]() { m_audio->setNr4MaskingDepth(val); });
         });
 
     popup->addSlider("Suppression", 0, 100,
-        static_cast<int>(s.value("NR4SuppressionStrength", "0.50").toFloat() * 100),
+        static_cast<int>(std::lround(cfg.nr4SuppressionStrength * 100.0f)),
         [](int v) { return QString::number(v / 100.0f, 'f', 2); },
         [this](int v) {
             float val = v / 100.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("NR4SuppressionStrength", QString::number(val, 'f', 2));
-            s.save();
+            ClientNrSettingsModel::instance().setNr4SuppressionStrength(val);
             QMetaObject::invokeMethod(m_audio, [this, val]() { m_audio->setNr4SuppressionStrength(val); });
         });
 
     popup->addCheckbox("Adaptive Noise",
-        s.value("NR4AdaptiveNoise", "True").toString() == "True",
+        cfg.nr4AdaptiveNoise,
         [this](bool on) {
-            auto& s = AppSettings::instance();
-            s.setValue("NR4AdaptiveNoise", on ? "True" : "False");
-            s.save();
+            ClientNrSettingsModel::instance().setNr4AdaptiveNoise(on);
             QMetaObject::invokeMethod(m_audio, [this, on]() { m_audio->setNr4AdaptiveNoise(on); });
         });
 
@@ -10983,28 +10976,25 @@ void MainWindow::showNr4ParamPopup(const QPoint& globalPos)
 
 void MainWindow::showDfnrParamPopup(const QPoint& globalPos)
 {
-    auto& s = AppSettings::instance();
+    const ClientNrSettingsModel::Config cfg =
+        ClientNrSettingsModel::instance().config();
     auto* popup = new DspParamPopup(this);
 
     popup->addSlider("Attenuation Limit (dB)", 0, 100,
-        static_cast<int>(s.value("DfnrAttenLimit", "100").toFloat()),
+        static_cast<int>(std::lround(cfg.dfnrAttenLimitDb)),
         [](int v) { return QString::number(v); },
         [this](int v) {
             float db = static_cast<float>(v);
-            auto& s = AppSettings::instance();
-            s.setValue("DfnrAttenLimit", QString::number(db, 'f', 0));
-            s.save();
+            ClientNrSettingsModel::instance().setDfnrAttenLimitDb(db);
             QMetaObject::invokeMethod(m_audio, [this, db]() { m_audio->setDfnrAttenLimit(db); });
         });
 
     popup->addSlider("Post-Filter Beta", 0, 30,
-        static_cast<int>(s.value("DfnrPostFilterBeta", "0.0").toFloat() * 100),
+        static_cast<int>(std::lround(cfg.dfnrPostFilterBeta * 100.0f)),
         [](int v) { return QString::number(v / 100.0f, 'f', 2); },
         [this](int v) {
             float beta = v / 100.0f;
-            auto& s = AppSettings::instance();
-            s.setValue("DfnrPostFilterBeta", QString::number(beta, 'f', 2));
-            s.save();
+            ClientNrSettingsModel::instance().setDfnrPostFilterBeta(beta);
             QMetaObject::invokeMethod(m_audio, [this, beta]() { m_audio->setDfnrPostFilterBeta(beta); });
         });
 

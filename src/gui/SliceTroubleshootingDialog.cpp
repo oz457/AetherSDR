@@ -3,6 +3,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/DeviceDiagnostics.h"
+#include "models/ClientNrSettingsModel.h"
 #include "models/Nr2SettingsModel.h"
 #include "models/RadioModel.h"
 
@@ -337,13 +338,14 @@ QString nr4MethodName(int id)
 
 QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
 {
-    auto& settings = AppSettings::instance();
     const Nr2SettingsModel::Config nr2Config =
         Nr2SettingsModel::instance().config();
 
     const int nr2GainMethod = nr2Config.gainMethod;
     const int nr2NpeMethod = nr2Config.npeMethod;
-    const int nr4MethodId = settings.value("NR4NoiseEstimationMethod", "0").toInt();
+    const ClientNrSettingsModel::Config clientNr =
+        ClientNrSettingsModel::instance().config();
+    const int nr4MethodId = clientNr.nr4NoiseMethod;
 
     QJsonObject nr2;
     nr2["enabled"] = audio ? audio->nr2Enabled() : false;
@@ -361,12 +363,12 @@ QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
     nr4["enabled"] = audio ? audio->nr4Enabled() : false;
     nr4["noise_method_id"] = nr4MethodId;
     nr4["noise_method"] = nr4MethodName(nr4MethodId);
-    nr4["adaptive_noise"] = settings.value("NR4AdaptiveNoise", "True").toString() == "True";
-    nr4["reduction_db"] = settings.value("NR4ReductionAmount", "10.0").toFloat();
-    nr4["smoothing_pct"] = settings.value("NR4SmoothingFactor", "0.0").toFloat();
-    nr4["whitening_pct"] = settings.value("NR4WhiteningFactor", "0.0").toFloat();
-    nr4["masking_depth"] = settings.value("NR4MaskingDepth", "0.50").toFloat();
-    nr4["suppression_strength"] = settings.value("NR4SuppressionStrength", "0.50").toFloat();
+    nr4["adaptive_noise"] = clientNr.nr4AdaptiveNoise;
+    nr4["reduction_db"] = clientNr.nr4ReductionDb;
+    nr4["smoothing_pct"] = clientNr.nr4SmoothingPercent;
+    nr4["whitening_pct"] = clientNr.nr4WhiteningPercent;
+    nr4["masking_depth"] = clientNr.nr4MaskingDepth;
+    nr4["suppression_strength"] = clientNr.nr4SuppressionStrength;
 
     QJsonObject rn2;
     rn2["enabled"] = audio ? audio->rn2Enabled() : false;
@@ -374,8 +376,8 @@ QJsonObject buildClientDspSnapshot(const AudioEngine* audio)
 
     QJsonObject dfnr;
     dfnr["enabled"] = audio ? audio->dfnrEnabled() : false;
-    dfnr["atten_limit_db"] = settings.value("DfnrAttenLimit", "100").toFloat();
-    dfnr["post_filter_beta"] = settings.value("DfnrPostFilterBeta", "0.0").toFloat();
+    dfnr["atten_limit_db"] = clientNr.dfnrAttenLimitDb;
+    dfnr["post_filter_beta"] = clientNr.dfnrPostFilterBeta;
 
     QJsonObject nnr;
     nnr["enabled"] = audio ? audio->nnrEnabled() : false;

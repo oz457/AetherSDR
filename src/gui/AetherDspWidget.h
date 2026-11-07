@@ -151,6 +151,7 @@ private:
     void clearBnrRows();
     void updateNr2ControlAvailability();
     void syncNr2Settings();
+    void syncClientNrSettings(bool silent);
 
     AudioEngine*    m_audio;
     QStackedWidget* m_dspStack{nullptr};
