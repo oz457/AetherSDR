@@ -640,6 +640,19 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
     QString token = QStringLiteral("color.text.secondary");
     if (!bound) {
         text = tr("Hermes-Lite 2 only");
+    } else if (s.enabled && s.feedbackLimit > 1) {
+        // Before everything else, a leftover request error included: the
+        // level is at or above the scale, so the HL2's receive input is
+        // overdriven. Only computed while enabled.
+        text = tr("WARNING: too much RF feedback — this can damage your transceiver. "
+                  "Add an attenuator in the feedback path.");
+        token = QStringLiteral("color.accent.danger");
+    } else if (s.enabled && s.feedbackLimit > 0) {
+        // Above the window at the most attenuation: no calibration until an
+        // attenuator brings it down, but still inside the scale.
+        text = tr("Feedback too strong to calibrate at 31 dB — add an attenuator in the "
+                  "feedback path");
+        token = QStringLiteral("color.accent.warning");
     } else if (!m_error.isEmpty()) {
         text = m_error;
         token = QStringLiteral("color.accent.danger");
@@ -648,11 +661,6 @@ void PureSignalApplet::onStatus(const PureSignalView& s)
         token = QStringLiteral("color.accent.warning");
     } else if (!s.enabled) {
         text = tr("Off — uses DDC 2 and 3 for feedback");
-    } else if (s.feedbackLimit > 0) {
-        // Before everything else: the HL2's receive input is overdriven.
-        text = tr("WARNING: too much RF feedback — this can damage your transceiver. "
-                  "Add an attenuator in the feedback path.");
-        token = QStringLiteral("color.accent.danger");
     } else if (s.feedbackLimit < 0) {
         text = tr("Feedback too weak at full gain — check the coupler or sampler");
         token = QStringLiteral("color.accent.warning");
