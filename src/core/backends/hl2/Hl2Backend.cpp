@@ -2187,6 +2187,12 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
 
 Hl2Backend::~Hl2Backend()
 {
+    // Close the direct transmit-audio path before anything it uses goes. The
+    // lock waits for a submit in progress on the AudioEngine thread.
+    {
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_directTxGate->backend = nullptr;
+    }
     // Join the build thread before the I/O thread it posts to, so finished
     // channels are installed or destroyed by their owning thread. Blocks for
     // an in-flight OpenChannel (WDSP opens cannot be cancelled).
@@ -4992,6 +4998,7 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         m_sinceUnkey.start();
     }
     m_keyed = key;
+    m_keyedAudio.store(key);
     // PureSignal collects only while keyed (calcc's MOX). Queued to the I/O
     // thread behind the MOX write, so feedback after the edge is the keyed one.
     if (keyChanged && m_pureSignal) {
@@ -5658,7 +5665,7 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // fill the transmit queue with audio that goes out the instant MOX asserts —
     // the operator would hear the last second of the shack on their first
     // syllable.
-    if (!m_txDsp || !m_keyed || int16Stereo.isEmpty())
+    if (!m_txDsp || !m_keyedAudio.load() || int16Stereo.isEmpty())
         return;
     // Sticky per transmission until #5647 gives it a job in TxAudioSource
     // (see Hl2Backend.h). Assumes sources never interleave within one
@@ -5668,8 +5675,8 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // is active). Hl2TxDsp::processAudioBlock also drops m_inBuffer residue on
     // a mid-transmission source change, with a warning. Anyone changing the
     // mic-capture gate or adding an engine feed must re-check these fences.
-    m_txAudioClientLeveled =
-        m_txAudioClientLeveled || (source == TxAudioSource::ClientLeveled);
+    if (source == TxAudioSource::ClientLeveled)
+        m_txAudioClientLeveled.store(true);
     // Before the block is queued to the modulator, so the prime sees the
     // larger TCI/DAX margin by the time this audio reaches the wire.
     if (m_metis)
@@ -5677,14 +5684,13 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // The unkey diagnostic must not tell a WSPR beacon to raise its mic gain.
     // Engine-generated audio has no mic slider in its path at all now, so
     // "raise mic gain" would point at a control that cannot move it.
-    m_txAudioEngineGenerated =
-        m_txAudioEngineGenerated || (source == TxAudioSource::EngineGenerated);
+    if (source == TxAudioSource::EngineGenerated)
+        m_txAudioEngineGenerated.store(true);
     if (sampleRateHz != 24000) {
         // Stated rather than silently resampled: the modulator's upsampler
         // assumes this rate, and a mismatch transmits at the wrong pitch.
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
             qWarning() << "Hl2Backend: TX audio arrived at" << sampleRateHz
                        << "Hz, expected 24000 — not transmitting";
         }
@@ -5705,6 +5711,25 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                               [dsp = m_txDsp, mono = std::move(mono), source, context] {
         dsp->processAudioBlock(mono, source, context);
     }, Qt::QueuedConnection);
+}
+
+Hl2Backend::DirectTxSubmitter Hl2Backend::directTxSubmitter()
+{
+    {
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_directTxGate->backend = this;
+    }
+    return [gate = m_directTxGate](const QByteArray& pcm, int rateHz, TxAudioSource source,
+                                   const TxCoordinator::Context& context) {
+        const std::lock_guard<std::mutex> lock(gate->mutex);
+        if (!gate->backend)
+            return false;
+        // Everything submitTxAudio() touches is safe off the GUI thread: the
+        // keyed state and the per-transmission flags are atomics, the margin
+        // setter is atomic, and the block is queued to the I/O thread.
+        gate->backend->submitTxAudio(pcm, rateHz, source, context);
+        return true;
+    };
 }
 
 void Hl2Backend::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
@@ -8600,6 +8625,7 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
+    m_keyedAudio.store(false);
     m_radioPtt = false;
     m_swrGate.reset();
     publishTransmitState();
