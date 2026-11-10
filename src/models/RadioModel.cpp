@@ -9927,7 +9927,7 @@ bool RadioModel::submitTxAudioDirect(const QByteArray& int16Stereo, int sampleRa
 
 void RadioModel::installDirectTxSubmitter()
 {
-    auto* hl2 = dynamic_cast<Hl2Backend*>(m_backend.get());
+    auto* hl2 = dynamic_cast<hl2::Hl2Backend*>(m_backend.get());
     const std::lock_guard<std::mutex> lock(m_directTxMutex);
     m_directTx = nullptr;
     if (hl2 && qEnvironmentVariable("AETHER_HL2_TX_DIRECT") != QLatin1String("0"))
