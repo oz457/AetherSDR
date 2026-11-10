@@ -1,6 +1,7 @@
 #include "core/backends/hl2/Hl2RxDsp.h"
 
 #include "core/backends/hl2/Hl2AdcPairing.h"
+#include "core/backends/hl2/Hl2IoProbe.h"
 
 #include <QLoggingCategory>
 #include <QMetaType>
@@ -768,6 +769,7 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     // independent of span; signals entirely between displayed frames are not
     // seen.
     if (spectrumFrameDue()) {
+        const IoStageScope ioStage(IoStage::RxSpectrum);
         // "Due" STAYS true until a frame actually completes: one EP6 block is
         // 126 samples and a frame is 1024, so a frame boundary can be up to one
         // block away even with a full window behind it.
@@ -778,6 +780,7 @@ void Hl2RxDsp::processIqBlock(const std::vector<std::complex<float>>& iq)
     } else {
         // Keep the window fed without paying for a transform. This is the whole
         // saving at a wide span: the FFT is skipped, not merely its emit.
+        const IoStageScope ioStage(IoStage::RxSpectrum);
         m_spectrum->accumulate(m_conjugated);
     }
 

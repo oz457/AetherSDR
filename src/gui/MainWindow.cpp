@@ -11,6 +11,7 @@
 #include "MainWindow.h"
 #include <utility>
 #include "core/AppActivity.h"
+#include "core/backends/hl2/Hl2IoProbe.h"
 #include "core/backends/AutoRfGainControl.h"
 
 #include "MainWindowHelpers.h"
@@ -1235,6 +1236,10 @@ MainWindow::MainWindow(QWidget* parent)
         AppSettings::instance().value("AudioBufferMs", "100").toInt());
     m_audio->moveToThread(m_audioThread);
     AetherSDR::startStreamThread(m_audioThread);   // High QoS; see AppActivity.h
+    // Test build: MMCSS "Pro Audio" for the audio thread, as for hl2-io.
+    QMetaObject::invokeMethod(m_audio, [] {
+        hl2::promoteCurrentThreadToProAudio("AudioEngine");
+    }, Qt::QueuedConnection);
     const auto updateAetherDspPolicy = [this](bool) {
         updateAetherDspModePolicy();
     };

@@ -936,6 +936,7 @@ set(CORE_SOURCES
     src/core/backends/hl2/Hl2Spectrum.cpp    # aetherd HL2 Phase 1a (FFT panadapter, FFTW)
     src/core/backends/hl2/Hl2RxDsp.cpp       # aetherd HL2 Phase 1a (IQ -> WdspChannel demod + spectrum)
     src/core/backends/hl2/Hl2TxDsp.cpp       # SSB transmit chain (TX audio -> baseband IQ)
+    src/core/backends/hl2/Hl2IoProbe.cpp     # test build: I/O-thread stall monitor, MMCSS
     src/core/backends/hl2/Hl2PureSignal.cpp  # PureSignal controller around WDSP calcc (HL2)
     src/core/backends/hl2/Hl2Backend.cpp     # aetherd HL2 Phase 1b (IRadioBackend impl)
     src/core/backends/hl2/Hl2Discovery.cpp   # aetherd HL2 Phase 1c (HPSDR discovery -> picker)

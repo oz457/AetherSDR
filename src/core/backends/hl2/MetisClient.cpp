@@ -1,5 +1,6 @@
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/Hl2EmergencyStop.h"
+#include "core/backends/hl2/Hl2IoProbe.h"
 #include "core/LogManager.h"   // lcHl2 — commanded-NCO breadcrumbs
 #include "core/TxChainLatency.h"
 
@@ -484,6 +485,8 @@ void MetisClient::armStartRetry()
 
 void MetisClient::onEp2PacerTick()
 {
+    hl2IoHeartbeat();
+    const IoStageScope ioStage(IoStage::Ep2Send);
     if (!m_running || (!m_socket && !m_packetSinkForTest) || m_ep2IntervalUs <= 0)
         return;
     // Catch-up: emit however many frames the wall clock says are due, capped so
@@ -500,6 +503,7 @@ void MetisClient::onEp2PacerTick()
 
 void MetisClient::onWatchdogTick()
 {
+    const IoStageScope ioStage(IoStage::Watchdog);
     if (!m_running || !m_linkUp)
         return;
     // Inside a receiver-count restart's stop-to-start window the silence is
@@ -1486,6 +1490,7 @@ void MetisClient::clearCwKeying()
 
 void MetisClient::queueTxIq(std::span<const std::complex<float>> iq, const TxCoordinator::Context& context)
 {
+    const IoStageScope ioStage(IoStage::TxQueue);
     if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
@@ -2154,6 +2159,7 @@ void MetisClient::handleDatagram(std::span<const std::uint8_t> bytes)
 
 void MetisClient::onReadyRead()
 {
+    const IoStageScope ioStage(IoStage::Ep6Receive);
     accountReceiveWakeup();
 
     while (m_socket && m_socket->hasPendingDatagrams()) {

@@ -19,6 +19,7 @@
 #include "core/backends/hl2/Hl2OverloadPolicy.h"
 #include "core/backends/hl2/Hl2DspSetupPolicy.h"
 #include "core/backends/hl2/Hl2GainSplit.h"
+#include "core/backends/hl2/Hl2IoProbe.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/backends/hl2/MetisClient.h"
 #include "core/backends/hl2/MetisProtocol.h"
@@ -375,6 +376,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
                              pureSignalFields());
     }, Qt::QueuedConnection);
     AetherSDR::startStreamThread(m_ioThread);   // High QoS; see AppActivity.h
+    // Test build: MMCSS "Pro Audio" for this thread (WDSP's workers already
+    // run there) and the stall monitor. Runs on the I/O thread itself.
+    QMetaObject::invokeMethod(m_metis, [] { hl2IoThreadStarted(); }, Qt::QueuedConnection);
 
     // The rate-change build thread — see the member declarations. Started here
     // and never restarted: it is idle except during a pan-bandwidth crossing,
@@ -436,14 +440,18 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // THERE, and m_rx belongs to the GUI thread. See publishIoDsps().
         const std::size_t n = std::min(blocks.size(), m_ioDsps.size());
         for (std::size_t i = 0; i < n; ++i) {
-            if (m_ioDsps[i])
+            if (m_ioDsps[i]) {
+                const IoStageScope ioStage(IoStage::RxDsp);
                 m_ioDsps[i]->processIqBlock(blocks[i]);
+            }
         }
         // PureSignal: DDC 3 carries the TX DAC samples and DDC 2 the coupler
         // feedback while keyed (MetisClient::setPureSignal). feed() drops them
         // unless PureSignal is on and keyed, and it is on this thread too.
-        if (blocks.size() >= 4 && m_pureSignal)
+        if (blocks.size() >= 4 && m_pureSignal) {
+            const IoStageScope ioStage(IoStage::PureSignal);
             m_pureSignal->feed(blocks[3], blocks[2]);
+        }
     }, Qt::DirectConnection);
 
     // EP6 interleaves every active DDC. Invalidate each partial FFT before

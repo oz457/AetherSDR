@@ -1,4 +1,5 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
+#include "core/backends/hl2/Hl2IoProbe.h"
 
 #include <algorithm>
 #include <cmath>
@@ -666,6 +667,7 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
                                  TxAudioSource source,
                                  const TxCoordinator::Context& context)
 {
+    const IoStageScope ioStage(IoStage::TxModulator);
     if (!context.permitsDispatch(TxCoordinator::monotonicMs())) {
         return;
     }
