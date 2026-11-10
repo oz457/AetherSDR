@@ -374,6 +374,12 @@ void SetTXACTCSSRun(int channel, int run);
 // power of two >= the DSP size. TXASetMP does not stop it.
 void TXASetNC(int channel, int nc);
 void TXASetMP(int channel, int mp);
+// TXA leveler (wcpAGC.c): a slow AGC ahead of the ALC, off after create_txa.
+// Top is the maximum gain in dB, decay and attack are in ms. Each call takes
+// the channel's csDSP itself.
+void SetTXALevelerSt(int channel, int state);
+void SetTXALevelerTop(int channel, double maxgain);
+void SetTXALevelerDecay(int channel, int decay);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip

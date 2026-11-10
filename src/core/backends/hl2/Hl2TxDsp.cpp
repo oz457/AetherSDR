@@ -125,6 +125,8 @@ bool Hl2TxDsp::buildModulator(std::string* error)
         << " Hz dsp, blocks " << static_cast<int>(c.inputBlockSize) << "/"
         << static_cast<int>(c.dspBlockSize) << ", passband "
         << c.filterLowHz << ".." << c.filterHighHz << " Hz";
+    m_levelerLogged = false;
+    applyLeveler();
     return true;
 }
 
@@ -149,6 +151,46 @@ void Hl2TxDsp::applyModeAndFilter()
     if (!m_channel->setFilter(lowHz, highHz)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: passband change refused,"
                            << lowHz << ".." << highHz << "Hz";
+    }
+    applyLeveler();
+}
+
+// Voice modes only: in the digital modes the audio level is the operator's
+// power control (WSJT-X), and a leveler would undo it. EngineGenerated audio
+// (WSPR) runs in a digital mode, so it never meets the leveler either.
+// AETHER_HL2_TX_LEVELER=0 turns it off for an A/B test.
+void Hl2TxDsp::applyLeveler()
+{
+    if (!m_channel) {
+        return;
+    }
+    bool voice = false;
+    switch (m_config.mode) {
+    case WdspChannel::Mode::Usb:
+    case WdspChannel::Mode::Lsb:
+    case WdspChannel::Mode::Am:
+    case WdspChannel::Mode::Sam:
+    case WdspChannel::Mode::Dsb:
+    case WdspChannel::Mode::Fm:
+        voice = true;
+        break;
+    default:
+        break;
+    }
+    const bool disabled = qEnvironmentVariable("AETHER_HL2_TX_LEVELER") == QLatin1String("0");
+    const bool on = voice && !disabled;
+    if (!m_channel->setTxLeveler(on, kTxLevelerMaxGainDb, kTxLevelerDecayMs)) {
+        qCWarning(lcTxMod) << "HL2 TXA modulator: leveler change refused";
+        return;
+    }
+    if (on != m_levelerOn || !m_levelerLogged) {
+        m_levelerOn = on;
+        m_levelerLogged = true;
+        qCInfo(lcTxMod).nospace()
+            << "HL2 TXA modulator: leveler " << (on ? "on" : "off")
+            << " (max gain " << kTxLevelerMaxGainDb << " dB, decay "
+            << kTxLevelerDecayMs << " ms" << (disabled ? ", disabled by AETHER_HL2_TX_LEVELER=0" : "")
+            << ")";
     }
 }
 

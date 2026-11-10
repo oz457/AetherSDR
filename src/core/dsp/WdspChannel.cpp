@@ -1051,6 +1051,25 @@ bool WdspChannel::setMinimumPhase(bool on) noexcept
     return true;
 }
 
+bool WdspChannel::setTxLeveler(bool on, double maxGainDb, int decayMs) noexcept
+{
+    if (m_config.direction != Direction::Transmit || !std::isfinite(maxGainDb)
+        || maxGainDb < 0.0 || maxGainDb > 40.0 || decayMs <= 0
+        || !beginControlOperation()) {
+        return false;
+    }
+    {
+        // SetTXALeveler* take the channel's csDSP themselves; the setup lock
+        // only keeps this off a channel being opened or closed.
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetTXALevelerTop(m_channelId, maxGainDb);
+        SetTXALevelerDecay(m_channelId, decayMs);
+        SetTXALevelerSt(m_channelId, on ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)

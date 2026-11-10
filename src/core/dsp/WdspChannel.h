@@ -388,6 +388,11 @@ public:
     bool setFilterTaps(int taps) noexcept;
     bool setMinimumPhase(bool on) noexcept;
 
+    // TX only: TXA's leveler (create_txa builds it off, max gain 1.778).
+    // A slow AGC ahead of the ALC that lifts quiet speech by up to maxGainDb.
+    // Control path, not from processIq(); does not stop the channel.
+    bool setTxLeveler(bool on, double maxGainDb, int decayMs) noexcept;
+
     // Runtime FM detector deviation (Hz), RX only. Accepted in any mode but
     // audible only in FM (the fmd stage runs only when selected), so call order
     // with setMode() doesn't matter. Not WBFM: RXA_WBFM uses wbfm.c with a fixed

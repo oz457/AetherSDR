@@ -248,6 +248,12 @@ private:
     unsigned long long m_filterWindowFaultMark = 0;   // modulatorFaultBlocks() at window start
 
 #if AETHER_HL2_TX_TXA
+    // TXA leveler, Thetis's defaults (Setup > Transmit > Leveler).
+    static constexpr double kTxLevelerMaxGainDb = 15.0;
+    static constexpr int kTxLevelerDecayMs = 100;
+    void applyLeveler();
+    bool m_levelerOn{false};
+    bool m_levelerLogged{false};
     std::unique_ptr<WdspChannel> m_channel;
     // Whether the TXA channel is started; reset() stops it and the next block
     // restarts it. Tracked because setRunning() is a control call.
