@@ -8,6 +8,7 @@
 #include "CanonIndicators.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"
+#include "core/backends/hl2/Hl2TxTestKnobs.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -17,6 +18,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QLineEdit>
+#include <QSlider>
 #include <QMenu>
 #include <QActionGroup>
 #include <algorithm>
@@ -324,6 +326,42 @@ void TciApplet::buildUI()
             ss.save();
         }
     });
+    // Test build only: HL2 TXA leveler max gain, live. 15 dB is Thetis's
+    // default; lower keeps room noise between words from being pumped up.
+    auto* levRow = new QHBoxLayout;
+    levRow->setContentsMargins(4, 0, 4, 2);
+    levRow->setSpacing(4);
+    auto* levLabel = new QLabel(this);
+    levLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+    levLabel->setMinimumWidth(118);
+    auto* levSlider = new QSlider(Qt::Horizontal, this);
+    levSlider->setObjectName(QStringLiteral("tciTestHl2LevelerMaxGain"));
+    levSlider->setAccessibleName(tr("HL2 leveler max gain"));
+    levSlider->setToolTip(tr(
+        "<b>HL2 leveler max gain (test build)</b><br><br>"
+        "How far the HL2 TX leveler may raise quiet audio, 0 to 15 dB. "
+        "15 dB is Thetis's default. Takes effect on the next audio block, "
+        "also while transmitting."));
+    levSlider->setRange(0, 15);
+    levSlider->setPageStep(1);
+    {
+        bool ok = false;
+        int v = AppSettings::instance().value("TciTestHl2LevelerMaxGainDb", "15").toString().toInt(&ok);
+        if (!ok) v = 15;
+        v = std::clamp(v, 0, 15);
+        levSlider->setValue(v);
+        hl2::testknobs::levelerMaxGainDb.store(static_cast<double>(v));
+        levLabel->setText(tr("Leveler max: %1 dB").arg(v));
+    }
+    levRow->addWidget(levLabel);
+    levRow->addWidget(levSlider, 1);
+    connect(levSlider, &QSlider::valueChanged, this, [levLabel](int v) {
+        hl2::testknobs::levelerMaxGainDb.store(static_cast<double>(v));
+        levLabel->setText(tr("Leveler max: %1 dB").arg(v));
+        auto& ss = AppSettings::instance();
+        ss.setValue("TciTestHl2LevelerMaxGainDb", QString::number(v));
+        ss.save();
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -398,6 +436,7 @@ void TciApplet::buildUI()
     outer->addLayout(enableRow);
     outer->addLayout(dspRow);
     outer->addLayout(txDspRow);
+    outer->addLayout(levRow);
 
     connect(m_tciPort, &QLineEdit::editingFinished, this, [this]() {
         int port = m_tciPort->text().toInt();

@@ -1,5 +1,6 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2IoProbe.h"
+#include "core/backends/hl2/Hl2TxTestKnobs.h"
 
 #include <algorithm>
 #include <cmath>
@@ -180,7 +181,12 @@ void Hl2TxDsp::applyLeveler()
     }
     const bool disabled = qEnvironmentVariable("AETHER_HL2_TX_LEVELER") == QLatin1String("0");
     const bool on = voice && !disabled;
-    if (!m_channel->setTxLeveler(on, kTxLevelerMaxGainDb, kTxLevelerDecayMs)) {
+    const double knob = testknobs::levelerMaxGainDb.load(std::memory_order_relaxed);
+    const double maxGainDb = std::isfinite(knob) ? std::clamp(knob, 0.0, 20.0)
+                                                 : kTxLevelerMaxGainDb;
+    const bool gainChanged = knob != m_levelerMaxGainDb;
+    m_levelerMaxGainDb = knob;
+    if (!m_channel->setTxLeveler(on, maxGainDb, kTxLevelerDecayMs)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: leveler change refused";
         return;
     }
@@ -199,14 +205,14 @@ void Hl2TxDsp::applyLeveler()
     if (!m_channel->setTxCompressor(compOn, compOn ? compDb : 0.0)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: compressor change refused";
     }
-    const bool changed = on != m_levelerOn || compOn != m_compressorOn;
+    const bool changed = on != m_levelerOn || compOn != m_compressorOn || gainChanged;
     if (changed || !m_levelerLogged) {
         m_levelerOn = on;
         m_compressorOn = compOn;
         m_levelerLogged = true;
         qCInfo(lcTxMod).nospace()
             << "HL2 TXA modulator: leveler " << (on ? "on" : "off")
-            << " (max gain " << kTxLevelerMaxGainDb << " dB, decay "
+            << " (max gain " << maxGainDb << " dB, decay "
             << kTxLevelerDecayMs << " ms" << (disabled ? ", disabled by AETHER_HL2_TX_LEVELER=0" : "")
             << "), compressor " << (compOn ? "on" : "off");
         if (compOn)
@@ -263,6 +269,12 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
             return;
         }
         m_modulatorRunning = true;
+    }
+
+    // Test build: the TCI applet's leveler slider, picked up between blocks on
+    // this thread (the same thread setMode() pushes the leveler from).
+    if (testknobs::levelerMaxGainDb.load(std::memory_order_relaxed) != m_levelerMaxGainDb) {
+        applyLeveler();
     }
 
     // Queued behind anything still waiting for its exchange, so order is kept

@@ -259,6 +259,9 @@ private:
     void applyLeveler();
     bool m_levelerOn{false};
     bool m_levelerLogged{false};
+    // Test build: the leveler's max gain as last pushed to the channel; the
+    // TCI applet's slider sets testknobs::levelerMaxGainDb.
+    double m_levelerMaxGainDb{kTxLevelerMaxGainDb};
     bool m_compressorOn{false};
     std::unique_ptr<WdspChannel> m_channel;
     // Whether the TXA channel is started; reset() stops it and the next block
