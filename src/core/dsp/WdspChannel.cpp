@@ -1070,6 +1070,23 @@ bool WdspChannel::setTxLeveler(bool on, double maxGainDb, int decayMs) noexcept
     return true;
 }
 
+bool WdspChannel::setTxCompressor(bool on, double gainDb) noexcept
+{
+    if (m_config.direction != Direction::Transmit || !std::isfinite(gainDb)
+        || gainDb < 0.0 || gainDb > 20.0 || !beginControlOperation()) {
+        return false;
+    }
+    {
+        // As setTxLeveler: the setters take csDSP, the setup lock only keeps
+        // this off a channel being opened or closed.
+        const std::scoped_lock setupLock(g_setupMutex);
+        SetTXACompressorGain(m_channelId, gainDb);
+        SetTXACompressorRun(m_channelId, on ? 1 : 0);
+    }
+    endControlOperation();
+    return true;
+}
+
 bool WdspChannel::setShift(double shiftHz) noexcept
 {
     if (m_config.direction != Direction::Receive || !std::isfinite(shiftHz)

@@ -393,6 +393,10 @@ public:
     // Control path, not from processIq(); does not stop the channel.
     bool setTxLeveler(bool on, double maxGainDb, int decayMs) noexcept;
 
+    // TX only: TXA's speech compressor (Thetis's CPDR), gain in dB. Its
+    // post-filter bp1 is switched on with it. Control path.
+    bool setTxCompressor(bool on, double gainDb) noexcept;
+
     // Runtime FM detector deviation (Hz), RX only. Accepted in any mode but
     // audible only in FM (the fmd stage runs only when selected), so call order
     // with setMode() doesn't matter. Not WBFM: RXA_WBFM uses wbfm.c with a fixed

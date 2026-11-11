@@ -184,14 +184,37 @@ void Hl2TxDsp::applyLeveler()
         qCWarning(lcTxMod) << "HL2 TXA modulator: leveler change refused";
         return;
     }
-    if (on != m_levelerOn || !m_levelerLogged) {
+    // Test build: the speech compressor, for voice only, as the leveler.
+    double compDb = kTxCompressorDefaultDb;
+    bool compFromEnv = false;
+    {
+        bool ok = false;
+        const double env = qEnvironmentVariable("AETHER_HL2_TX_COMP").toDouble(&ok);
+        if (ok && std::isfinite(env)) {
+            compDb = std::clamp(env, 0.0, 20.0);
+            compFromEnv = true;
+        }
+    }
+    const bool compOn = voice && compDb > 0.0;
+    if (!m_channel->setTxCompressor(compOn, compOn ? compDb : 0.0)) {
+        qCWarning(lcTxMod) << "HL2 TXA modulator: compressor change refused";
+    }
+    const bool changed = on != m_levelerOn || compOn != m_compressorOn;
+    if (changed || !m_levelerLogged) {
         m_levelerOn = on;
+        m_compressorOn = compOn;
         m_levelerLogged = true;
         qCInfo(lcTxMod).nospace()
             << "HL2 TXA modulator: leveler " << (on ? "on" : "off")
             << " (max gain " << kTxLevelerMaxGainDb << " dB, decay "
             << kTxLevelerDecayMs << " ms" << (disabled ? ", disabled by AETHER_HL2_TX_LEVELER=0" : "")
-            << ")";
+            << "), compressor " << (compOn ? "on" : "off");
+        if (compOn)
+            qCInfo(lcTxMod).nospace() << "HL2 TXA modulator: compressor gain " << compDb
+                << " dB" << (compFromEnv ? " (AETHER_HL2_TX_COMP)" : "");
+        qCInfo(lcTxMod).nospace() << "HL2 TXA modulator: pre-modulator ALC "
+            << (on ? "bypassed, TXA leveler and ALC do the levelling (clamp at +12 dB)"
+                   : "active (peak limiter at the target)");
     }
 }
 
@@ -742,6 +765,16 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
     // moving gain does not step at the block rate (#5912).
     Hl2TxAlc::Settings alc;
     alc.enabled = m_config.alcEnabled;
+#if AETHER_HL2_TX_TXA
+    // Test build: with TXA's leveler on (voice), the pre-modulator peak
+    // limiter pumped: every loud syllable pulled the gain down ~8 dB for half
+    // a second. Leave the levelling to the leveler, compressor and ALC inside
+    // TXA, as Thetis does, and keep only a clamp far above full scale.
+    if (m_levelerOn && source != TxAudioSource::EngineGenerated) {
+        alc.enabled = false;
+        alc.ceiling = 4.0f;
+    }
+#endif
     alc.targetPeak = m_config.alcTargetPeak;
     alc.releaseSec = m_config.alcReleaseSec;
     alc.sampleRateHz = static_cast<double>(m_config.inputSampleRateHz);

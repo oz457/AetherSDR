@@ -19,6 +19,9 @@ public:
         double targetPeak = 0.85;
         double releaseSec = 0.500;
         double sampleRateHz = 24000.0;
+        // The hard clamp. 1.0 everywhere, except where WDSP's TXA leveler and
+        // ALC follow and do the levelling themselves (Hl2TxDsp, test build).
+        float ceiling = 1.0f;
     };
     struct Levels {
         float micPeak = 0.0f;    // after mic gain, before the ALC
@@ -78,7 +81,8 @@ public:
                 const Knot& b = m_knots[k + 1];
                 g = a.g + (b.g - a.g) * (x - a.x) / (b.x - a.x);
             }
-            out[s] = std::clamp(static_cast<float>(out[s] * g), -1.0f, 1.0f);
+            out[s] = std::clamp(static_cast<float>(out[s] * g),
+                                -settings.ceiling, settings.ceiling);
             levels.postPeak = std::max(levels.postPeak, std::fabs(out[s]));
         }
         return levels;

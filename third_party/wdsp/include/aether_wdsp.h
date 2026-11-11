@@ -380,6 +380,11 @@ void TXASetMP(int channel, int mp);
 void SetTXALevelerSt(int channel, int state);
 void SetTXALevelerTop(int channel, double maxgain);
 void SetTXALevelerDecay(int channel, int decay);
+// TXA speech compressor (compress.c), Thetis's CPDR: gain in dB into a soft
+// clip, followed by bp1 (switched on with it by TXASetupBPFilters) against
+// the splatter. Each call takes the channel's csDSP itself.
+void SetTXACompressorRun(int channel, int run);
+void SetTXACompressorGain(int channel, double gain);
 // RXA meter readouts. RXA_S_PK / RXA_S_AV are the real signal-strength
 // meters. RXA_ADC_PK / RXA_ADC_AV measure the POST-DDC slice, which is a
 // different question from the HL2's own pre-DDC full-spectrum clip

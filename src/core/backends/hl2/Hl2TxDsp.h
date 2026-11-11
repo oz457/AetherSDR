@@ -253,9 +253,13 @@ private:
     // TXA leveler, Thetis's defaults (Setup > Transmit > Leveler).
     static constexpr double kTxLevelerMaxGainDb = 15.0;
     static constexpr int kTxLevelerDecayMs = 100;
+    // TXA speech compressor for voice, Thetis's CPDR. Test build:
+    // AETHER_HL2_TX_COMP=<dB> sets the gain (0 turns it off), default below.
+    static constexpr double kTxCompressorDefaultDb = 6.0;
     void applyLeveler();
     bool m_levelerOn{false};
     bool m_levelerLogged{false};
+    bool m_compressorOn{false};
     std::unique_ptr<WdspChannel> m_channel;
     // Whether the TXA channel is started; reset() stops it and the next block
     // restarts it. Tracked because setRunning() is a control call.
