@@ -263,6 +263,7 @@ private:
     // Test build: the leveler's max gain as last pushed to the channel; the
     // TCI applet's slider sets testknobs::levelerMaxGainDb.
     double m_levelerMaxGainDb{kTxLevelerMaxGainDb};
+    double m_compressorKnobDb{kTxCompressorDefaultDb};
     // Test build: per-over WAV tap of the TXA modulator's input and output.
     Hl2TxWavTap m_tapIn;
     Hl2TxWavTap m_tapIq;

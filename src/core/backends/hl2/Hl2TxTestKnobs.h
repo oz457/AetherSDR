@@ -11,6 +11,10 @@ namespace AetherSDR::hl2::testknobs {
 // Hl2TxDsp picks a change up on the next audio block it modulates.
 inline std::atomic<double> levelerMaxGainDb{15.0};
 
+// TXA speech compressor gain in dB, 0 = off. Set from the TCI applet's slider;
+// AETHER_HL2_TX_COMP still overrides it when set.
+inline std::atomic<double> compressorDb{6.0};
+
 // Record every over as two WAV files in the logs folder: what enters the TXA
 // modulator (mono, after mic gain) and what leaves it (I/Q, stereo). Set from
 // the TCI applet; read on the HL2 I/O thread.

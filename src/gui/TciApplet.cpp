@@ -382,6 +382,45 @@ void TciApplet::buildUI()
         ss.setValue("TciTestHl2LevelerMaxGainDb", QString::number(v));
         ss.save();
     });
+    // Test build only: HL2 TXA speech compressor gain, live. 0 = off. With
+    // the leveler and this both at 0 the TX chain is linear (mic gain + ALC).
+    auto* compRow = new QHBoxLayout;
+    compRow->setContentsMargins(4, 0, 4, 2);
+    compRow->setSpacing(4);
+    auto* compLabel = new QLabel(this);
+    compLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+    compLabel->setMinimumWidth(118);
+    auto* compSlider = new QSlider(Qt::Horizontal, this);
+    compSlider->setObjectName(QStringLiteral("tciTestHl2CompressorDb"));
+    compSlider->setAccessibleName(tr("HL2 compressor gain"));
+    compSlider->setToolTip(tr(
+        "<b>HL2 speech compressor (test build)</b><br><br>"
+        "Gain of the HL2 TX speech compressor, 0 to 20 dB; 0 switches it off. "
+        "6 dB is the default. Takes effect on the next audio block, "
+        "also while transmitting."));
+    compSlider->setRange(0, 20);
+    compSlider->setPageStep(1);
+    const auto compText = [](int v) {
+        return v == 0 ? tr("Compressor: off") : tr("Compressor: %1 dB").arg(v);
+    };
+    {
+        bool ok = false;
+        int v = AppSettings::instance().value("TciTestHl2CompressorDb", "6").toString().toInt(&ok);
+        if (!ok) v = 6;
+        v = std::clamp(v, 0, 20);
+        compSlider->setValue(v);
+        hl2::testknobs::compressorDb.store(static_cast<double>(v));
+        compLabel->setText(compText(v));
+    }
+    compRow->addWidget(compLabel);
+    compRow->addWidget(compSlider, 1);
+    connect(compSlider, &QSlider::valueChanged, this, [compLabel, compText](int v) {
+        hl2::testknobs::compressorDb.store(static_cast<double>(v));
+        compLabel->setText(compText(v));
+        auto& ss = AppSettings::instance();
+        ss.setValue("TciTestHl2CompressorDb", QString::number(v));
+        ss.save();
+    });
     // Port + Enable row (bottom)
     auto* enableRow = new QHBoxLayout;
     enableRow->setContentsMargins(4, 2, 4, 2);
@@ -457,6 +496,7 @@ void TciApplet::buildUI()
     outer->addLayout(dspRow);
     outer->addLayout(txDspRow);
     outer->addLayout(levRow);
+    outer->addLayout(compRow);
 
     connect(m_tciPort, &QLineEdit::editingFinished, this, [this]() {
         int port = m_tciPort->text().toInt();

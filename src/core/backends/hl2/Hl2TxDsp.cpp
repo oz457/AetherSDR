@@ -194,7 +194,11 @@ void Hl2TxDsp::applyLeveler()
         return;
     }
     // Test build: the speech compressor, for voice only, as the leveler.
-    double compDb = kTxCompressorDefaultDb;
+    const double compKnob = testknobs::compressorDb.load(std::memory_order_relaxed);
+    double compDb = std::isfinite(compKnob) ? std::clamp(compKnob, 0.0, 20.0)
+                                            : kTxCompressorDefaultDb;
+    const bool compGainChanged = compKnob != m_compressorKnobDb;
+    m_compressorKnobDb = compKnob;
     bool compFromEnv = false;
     {
         bool ok = false;
@@ -208,7 +212,8 @@ void Hl2TxDsp::applyLeveler()
     if (!m_channel->setTxCompressor(compOn, compOn ? compDb : 0.0)) {
         qCWarning(lcTxMod) << "HL2 TXA modulator: compressor change refused";
     }
-    const bool changed = on != m_levelerOn || compOn != m_compressorOn || gainChanged;
+    const bool changed = on != m_levelerOn || compOn != m_compressorOn || gainChanged
+                         || compGainChanged;
     if (changed || !m_levelerLogged) {
         m_levelerOn = on;
         m_compressorOn = compOn;
@@ -276,7 +281,8 @@ void Hl2TxDsp::modulate(std::span<const float> audio)
 
     // Test build: the TCI applet's leveler slider, picked up between blocks on
     // this thread (the same thread setMode() pushes the leveler from).
-    if (testknobs::levelerMaxGainDb.load(std::memory_order_relaxed) != m_levelerMaxGainDb) {
+    if (testknobs::levelerMaxGainDb.load(std::memory_order_relaxed) != m_levelerMaxGainDb
+        || testknobs::compressorDb.load(std::memory_order_relaxed) != m_compressorKnobDb) {
         applyLeveler();
     }
 
