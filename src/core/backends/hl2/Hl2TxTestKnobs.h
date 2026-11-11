@@ -11,4 +11,9 @@ namespace AetherSDR::hl2::testknobs {
 // Hl2TxDsp picks a change up on the next audio block it modulates.
 inline std::atomic<double> levelerMaxGainDb{15.0};
 
+// Record every over as two WAV files in the logs folder: what enters the TXA
+// modulator (mono, after mic gain) and what leaves it (I/Q, stereo). Set from
+// the TCI applet; read on the HL2 I/O thread.
+inline std::atomic<bool> txTapEnabled{false};
+
 } // namespace AetherSDR::hl2::testknobs

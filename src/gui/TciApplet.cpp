@@ -355,6 +355,26 @@ void TciApplet::buildUI()
     }
     levRow->addWidget(levLabel);
     levRow->addWidget(levSlider, 1);
+    // Test build only: record each over's TXA input and output as WAV files
+    // in the logs folder, to see where audio is lost or shaped.
+    auto* tapBox = new QCheckBox(tr("Record TX"), this);
+    tapBox->setObjectName(QStringLiteral("tciTestHl2TxTap"));
+    tapBox->setStyleSheet("QCheckBox { color: #8aa8c0; font-size: 11px; }");
+    tapBox->setToolTip(tr(
+        "<b>Record TX (test build)</b><br><br>"
+        "Writes every over as two WAV files in the AetherSDR logs folder: "
+        "txtap-...-in.wav (audio entering the HL2 TX modulator) and "
+        "txtap-...-iq.wav (the I/Q it sends to the radio)."));
+    tapBox->setChecked(
+        AppSettings::instance().value("TciTestHl2TxTap", "False").toString() == "True");
+    hl2::testknobs::txTapEnabled.store(tapBox->isChecked());
+    levRow->addWidget(tapBox);
+    connect(tapBox, &QCheckBox::toggled, this, [](bool on) {
+        hl2::testknobs::txTapEnabled.store(on);
+        auto& ss = AppSettings::instance();
+        ss.setValue("TciTestHl2TxTap", on ? "True" : "False");
+        ss.save();
+    });
     connect(levSlider, &QSlider::valueChanged, this, [levLabel](int v) {
         hl2::testknobs::levelerMaxGainDb.store(static_cast<double>(v));
         levLabel->setText(tr("Leveler max: %1 dB").arg(v));

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/hl2/Hl2TxAlc.h"
+#include "core/backends/hl2/Hl2TxTap.h"
 #include "core/dsp/WdspChannel.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/TxCoordinator.h"
@@ -262,6 +263,12 @@ private:
     // Test build: the leveler's max gain as last pushed to the channel; the
     // TCI applet's slider sets testknobs::levelerMaxGainDb.
     double m_levelerMaxGainDb{kTxLevelerMaxGainDb};
+    // Test build: per-over WAV tap of the TXA modulator's input and output.
+    Hl2TxWavTap m_tapIn;
+    Hl2TxWavTap m_tapIq;
+    std::vector<float> m_tapScratch;
+    void tapBlock(const float* in, std::size_t inFrames, const float* outI,
+                  const float* outQ, std::size_t outFrames);
     bool m_compressorOn{false};
     std::unique_ptr<WdspChannel> m_channel;
     // Whether the TXA channel is started; reset() stops it and the next block

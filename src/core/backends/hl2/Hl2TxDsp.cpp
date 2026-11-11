@@ -1,6 +1,9 @@
 #include "core/backends/hl2/Hl2TxDsp.h"
 #include "core/backends/hl2/Hl2IoProbe.h"
 #include "core/backends/hl2/Hl2TxTestKnobs.h"
+#include "core/SettingsPaths.h"
+#include <QDateTime>
+#include <QDir>
 
 #include <algorithm>
 #include <cmath>
@@ -377,6 +380,7 @@ void Hl2TxDsp::exchangeDueBlocks()
             off += block;
             continue;
         }
+        tapBlock(m_exchangePending.data() + off, block, m_outI.data(), m_outQ.data(), outBlock);
         for (std::size_t k = 0; k < outBlock; ++k) {
             // No conjugation (opposite of the phasing build): the signed
             // passband already gives the HPSDR wire's handedness. Adding -imag()
@@ -413,6 +417,42 @@ void Hl2TxDsp::exchangeDueBlocks()
     if (!m_exchangeTimer->isActive()) {
         m_exchangeTimer->start(1);
     }
+}
+
+void Hl2TxDsp::tapBlock(const float* in, std::size_t inFrames, const float* outI,
+                        const float* outQ, std::size_t outFrames)
+{
+    if (!testknobs::txTapEnabled.load(std::memory_order_relaxed)) {
+        m_tapIn.close();
+        m_tapIq.close();
+        return;
+    }
+    if (!m_tapIn.isOpen()) {
+        const QString dir = SettingsPaths::configDir() + QStringLiteral("/logs");
+        QDir().mkpath(dir);
+        const QString stem = dir + QStringLiteral("/txtap-")
+            + QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-HHmmss.zzz"));
+        const int inRate = m_config.inputSampleRateHz;
+        const int outRate = inRate * std::max(1, m_upsample);
+        const bool ok = m_tapIn.open((stem + QStringLiteral("-in.wav")).toStdString(), 1, inRate)
+                     && m_tapIq.open((stem + QStringLiteral("-iq.wav")).toStdString(), 2, outRate);
+        qCInfo(lcTxMod).noquote() << "HL2 TX tap:" << (ok ? "recording" : "could not open")
+                                  << stem + QStringLiteral("-{in,iq}.wav") << "in" << inRate
+                                  << "Hz, iq" << outRate << "Hz";
+        if (!ok) {
+            m_tapIn.close();
+            m_tapIq.close();
+            testknobs::txTapEnabled.store(false);
+            return;
+        }
+    }
+    m_tapIn.write(in, inFrames);
+    m_tapScratch.resize(outFrames * 2);
+    for (std::size_t k = 0; k < outFrames; ++k) {
+        m_tapScratch[2 * k] = outI[k];
+        m_tapScratch[2 * k + 1] = outQ[k];
+    }
+    m_tapIq.write(m_tapScratch.data(), outFrames);
 }
 
 void Hl2TxDsp::onExchangeTimer()
@@ -669,6 +709,9 @@ void Hl2TxDsp::reset()
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
     m_arrivalTimer.invalidate();
+    // Test build: one tap file pair per over.
+    m_tapIn.close();
+    m_tapIq.close();
     // The modulator's own state, per build. In the phasing build this is the
     // delay line; in the TXA build it deliberately does NOT rebuild the
     // channel. See resetModulatorState().
