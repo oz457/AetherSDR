@@ -716,6 +716,15 @@ void Hl2TxDsp::reset()
     m_filterWindowFaultMark = modulatorFaultBlocks();
     // Re-arm the mid-buffer source-change warning for the next transmission.
     m_sourceChangeWarned = false;
+    // One line per transmission for its late blocks, not one per block.
+    if (m_lateBlocks > 0) {
+        qCInfo(lcTxMod).nospace()
+            << "HL2 tx audio: " << m_lateBlocks
+            << " block(s) arrived 60 ms or more late this transmission, worst "
+            << m_worstGapMs << " ms";
+    }
+    m_lateBlocks = 0;
+    m_worstGapMs = 0;
     m_arrivalTimer.invalidate();
     // Test build: one tap file pair per over.
     m_tapIn.close();
@@ -766,13 +775,24 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
         return;
     // Diagnostic: a late block here means the producer (AudioEngine, or the
     // GUI thread on the queued path) stalled, not the wire.
+    // Gaps up to the client prime's margin (kClientPrimeMarginMs) are absorbed
+    // and logged at debug; past it the gap reaches the air, so it warns.
     if (m_arrivalTimer.isValid()) {
         const qint64 gapMs = m_arrivalTimer.restart();
         if (gapMs >= 60) {
-            qCWarning(lcTxMod).nospace()
-                << "HL2 tx audio: block arrived " << gapMs
-                << " ms after the previous one (" << mono.size()
-                << " samples, source " << static_cast<int>(source) << ")";
+            ++m_lateBlocks;
+            m_worstGapMs = std::max(m_worstGapMs, gapMs);
+            if (gapMs > kClientPrimeMarginMs) {
+                qCWarning(lcTxMod).nospace()
+                    << "HL2 tx audio: block arrived " << gapMs
+                    << " ms after the previous one, past the prime margin ("
+                    << mono.size() << " samples, source " << static_cast<int>(source) << ")";
+            } else {
+                qCDebug(lcTxMod).nospace()
+                    << "HL2 tx audio: block arrived " << gapMs
+                    << " ms after the previous one (" << mono.size()
+                    << " samples, source " << static_cast<int>(source) << ")";
+            }
         }
     } else {
         m_arrivalTimer.start();

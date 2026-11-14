@@ -5156,7 +5156,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
-    m_keyedAudio.store(key);
+    if (!key) {
+        // Under the direct-submit gate: the AudioEngine thread holds it from
+        // its m_keyedAudio check to the post of the block, so a block is either
+        // posted before the unkey's reset and flush below, or refused. That is
+        // the ordering the GUI thread gave when it was the only submitter.
+        // Key-down stores true further on, after the setMox post.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(false);
+    }
     // PureSignal collects only while keyed (calcc's MOX). Queued to the I/O
     // thread behind the MOX write, so feedback after the edge is the keyed one.
     if (keyChanged && m_pureSignal) {
@@ -5239,6 +5247,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 dsp->reset();
             }
         }, Qt::QueuedConnection);
+    }
+    if (key) {
+        // Only now, after the setMox post: the I/O thread runs posts in order,
+        // so the first direct block of a new over lands after that over's
+        // dsp->reset() rather than being wiped by it.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(true);
     }
     // The receive filter and an owed RF drive wait out the radio's transmit
     // tail (see kTxTailHoldMs), armed only after the MOX-off is queued.
@@ -9138,7 +9153,11 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
-    m_keyedAudio.store(false);
+    {
+        // Same ordering as applyKeying(): see there.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(false);
+    }
     m_radioPtt = false;
     m_swrGate.reset();
     publishTransmitState();
