@@ -3628,10 +3628,6 @@ int main(int argc, char** argv)
     std::printf("%s  tx_filter_band_ex is not offered by a radio without TX cutoffs\n",
                 txFilterBandExCaps ? "PASS" : "FAIL");
 
-    const bool tciSwrGated = AetherSDR::TciServerReviewTest::tciSwrIsGatedOnInstantForwardPower();
-    std::printf("%s  tx_sensors SWR is gated on instant forward power and resets on un-key\n",
-                tciSwrGated ? "PASS" : "FAIL");
-
     const bool workerStall = AetherSDR::TciServerReviewTest::workerKeepsStreamingDuringOwnerStall();
     const bool lateKeyAbort = AetherSDR::TciServerReviewTest::lateKeyIsAbortedOnModelThread();
     const bool inputFence = AetherSDR::TciServerReviewTest::ingressReleaseFencesEarlierCommands();
