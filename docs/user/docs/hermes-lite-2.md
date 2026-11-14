@@ -232,7 +232,6 @@ AetherSDR remembers **Auto**, **Auto-attenuate feedback** and a manual **TX att*
 
 ## Known issues
 
-- Keying with the HL2's hardware PTT jack shows as transmit in AetherSDR and mutes the receiver, but does not carry host audio: only the radio is keyed, and AetherSDR sends no modulation ([#5998](https://github.com/aethersdr/AetherSDR/issues/5998)).
 - RF1's output level against the RF power slider, and its harmonics, have not been measured ([#4954](https://github.com/aethersdr/AetherSDR/issues/4954)). Start low and use a fixed attenuator before any receiver or analyzer.
 - Each over starts with keyed silence before your audio is transmitted: about 125 ms from the microphone and 175 to 195 ms from a TCI client, longer when the client's audio arrives unevenly ([#6052](https://github.com/aethersdr/AetherSDR/issues/6052)).
 - One user reported spill beside the SSB signal while transmitting, and a busy ALC gauge. The distorted audio in the same report was clean from v26.10.1. A later side-by-side on that station, with a 300 to 2700 Hz transmit filter, showed the same output from AetherSDR as from deskHPSDR; no retest since then is on record ([#5198](https://github.com/aethersdr/AetherSDR/issues/5198)).
