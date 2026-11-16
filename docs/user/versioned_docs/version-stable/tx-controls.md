@@ -48,7 +48,11 @@ the Tuner Genius XL.
 ### TUNE
 
 - **Right-click TUNE** to choose **Mono Tone** or **Two Tone** for the tune
-  carrier.
+  carrier. **Two Tone** requires a radio with a two-tone generator (FlexRadio).
+  On other connected radios the entry is dimmed with a reason; its keyboard
+  shortcut and MIDI action show the reason without starting TUNE. Use ordinary
+  **TUNE** for a single carrier on transmit-capable radios. Stopping an active
+  tune remains available.
 - Changes to **Tune Power** made while TUNE is keyed take effect immediately,
   including on the Hermes-Lite 2 and networked Icom radios.
 - TUNE and CW keying lock each other out: while TUNE is on, a paddle, straight
@@ -93,6 +97,14 @@ the Tuner Genius XL.
 - **MEM** shows the tuner's real memory state as the radio reports it, not
   just your last click.
 - ATU tune failures are reported in the status bar.
+- After a successful match, pressing **ATU** again at the same TX frequency
+  requests bypass. At a different TX frequency, it starts a new matching cycle.
+- On FlexRadio, selecting **XVTA**, **XVTB** or **XVTR** as the TX antenna dims
+  **ATU**, **MEM** and the **Success**, **Byp** and **Mem** indicators. The
+  internal ATU is outside that transmit path. **TUNE** remains available for
+  carrier and transverter drive checks; it does not start an ATU matching cycle.
+  **Tools → Pre-tune ATU Bands...** and **Tools → Clear ATU Memories...** are
+  also disabled, with the same transverter-path explanation.
 
 **ATU band pre-tune sweep.** Open it from **Tools → Pre-tune ATU Bands...** or
 right-click **ATU** → **Pre-tune bands…**. It walks the band-plan segments of
@@ -137,12 +149,22 @@ confirmation.
 - **+ACC** — accessory input toggle
 - **PROC** — speech processor (NOR/DX/DX+)
 - **DAX** — DAX audio toggle
-- **MON** — monitor + volume slider
+- **MON** — monitor + volume slider. Both are disabled, with an explanation
+  in their tooltips and accessible descriptions, when the connected radio
+  does not expose monitor control.
+
+MON and VOX shortcuts and MIDI mappings also refuse unsupported controls and
+show an unsupported-control notice instead of changing the model state.
+Radios that expose these controls keep their normal behavior.
 
 Hover the Level, Compression or ALC gauge for its exact value. In CW modes the
 applet switches to keyer controls, including the APF toggle and level.
+**Speed** sets CW keying speed in WPM: move the slider, or type a value and
+press **Enter** or leave the value field to apply it. The field follows the
+radio's supported range.
 **Pitch** sits directly below **Speed**: use its slider or enter a frequency
 in Hz in the value field. Pitch follows the radio's supported range and step.
+Status refreshes preserve an unfinished speed or pitch entry.
 **Breakin**, **Iambic**, and **Hold Delay** share a separate row.
 **Hold Delay** re-sends your break-in delay after CW speed changes made here;
 it does not cover speed changes made at the radio or by another client.
@@ -158,6 +180,10 @@ changes made at the radio or by another client; **Breakin** requests a change.
 
 - **AM Carrier slider** (0–100)
 - **VOX** toggle + level + delay
+
+  The toggle and level slider are disabled, with an explanation in their
+  tooltips and accessible descriptions, when the connected radio does not
+  expose VOX control. Delay is available only when the radio exposes it.
 
   Automation can explicitly disarm VOX with `invoke "VOX voice-operated transmit"
   setChecked false` without TX permission. The `vox_toggle` automation shortcut
@@ -244,10 +270,10 @@ The audio controls stay in place as the timer appears and fades. In minimal mode
 
 ## Using AetherTX (Aetherial Audio)
 
-The client-side transmit voice chain — gate with RN2, EQ, split-band
-de-esser, compressor with Drive/Phase, tube, AetherVoice exciter, reverb and
-the final output stage with brickwall limiter, DC block, test tone and
-Quindar tones — lives in the **AetherTX** window, **Tools → AetherTX...**
+The client-side transmit voice chain — RN2 microphone denoising, Tube, EQ,
+Compressor with Drive/Phase, AetherVoice Exciter, Reverb, and Final Output —
+lives in the **AetherTX** window, **Tools → AetherTX...** Final Output includes
+the brickwall limiter, DC block, test tone, and Quindar tones.
 AetherTX needs a computer microphone (Mic source **PC**).
 
 See [Aetherial Audio](./aetherial-audio.md) for the stage reference and profiles.

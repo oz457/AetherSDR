@@ -1,6 +1,7 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include "DaxTxAudioPermit.h"
 #include "TciProtocol.h"
 #include "TciClient.h"
 #include "TciAudioHeader.h"
@@ -8,10 +9,12 @@
 #include <QThread>
 #include "TciRoutingState.h"
 #include "TciTrxMap.h"
+#include "TciIqDecimator.h"
 #include "IcomTciUnkeySettle.h"
 #include "PcmFrame.h"
 #include "TxCoordinator.h"
 #include "core/backends/SliceLifecycleRequest.h"
+#include "models/RadioSwrValidityFilter.h"
 
 #include <QWebSocketProtocol>  // CloseCode for the m_rxClose test seam
 #include <QObject>
@@ -76,6 +79,7 @@ class TciServer : public QObject {
     friend class TciServerReviewTest;
     friend class TciSliceLifecycleTestAccess;
     friend class TciRxAudioTest;
+    friend class TciHostIqTest;
     friend class Hl2TciSignalingTest;
     friend class TxOperationIntegrationTestAccess;
 
@@ -166,6 +170,9 @@ public slots:
     void onDaxPcmReady(int channel, const PcmFrame& frame);
     // IQ data from DAX IQ stream (big-endian float32 I/Q pairs)
     void onIqDataReady(int channel, const QByteArray& rawPayload, int sampleRate);
+    // IQ from a backend that has its own (HL2): native float32 I/Q pairs for
+    // one slice, centred on its pan. See IRadioBackend::sliceIqFrameReady.
+    void onSliceIqReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
     // Waterfall row from PanadapterStream — forwarded to spectrum_event subscribers
     void onWaterfallRowReady(quint32 streamId, const QVector<float>& binsDbm,
                              double lowMhz, double highMhz,
@@ -209,6 +216,11 @@ private slots:
 
 private:
     struct ClientState;
+
+    // tx_sensors goes out while this station's transmitter carries RF:
+    // MOX/PTT, tune, or a key the radio reports, and only while this station
+    // holds the transmitter.
+    static bool txSensorsKeyed(RadioModel& model);
 
     // Controller-side cleanup plus a one-way barrier that destroys worker
     // sockets on their owning thread. Never asks the worker to access a model.
@@ -256,7 +268,10 @@ private:
     void handleSplitRequest(TciClient* client, const TciProtocol::SplitRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request);
     void handleTrxRequest(TciClient* client, const TciProtocol::TrxRequest& request,
-                          const TxCoordinator::Request& txRequest);
+                          const TxCoordinator::Request& txRequest, bool wantsAudio,
+                          const DaxTxAudioPermit& daxPermit);
+    void retireTrxRequest(TciClient* client, const TxCoordinator::Request& request);
+    bool trxWantsAudio(TciClient* client, const TciProtocol::TrxRequest& request) const;
     void tuneSliceAndConfirm(
         TciClient* client, int trx, int channel, int sliceId, long long frequencyHz);
     void promoteTxSliceAndContinue(int sliceId, std::function<void(bool)> continuation);
@@ -311,6 +326,9 @@ private:
     struct ClientState {
         TxCoordinator::Producer txProducer;
         TxCoordinator::Request pttRequest;
+        DaxTxAudioPermit pttDaxPermit{DaxTxAudioPermit::blocked()};
+        bool pttWantsAudio{false};
+        std::optional<DaxTxAudioPermit> ingressDaxPermit;
         QPointer<TciClient> socket;
         TciProtocol* protocol{nullptr};
         QString      processName;        // #5087 — see TciClientInfo
@@ -366,7 +384,13 @@ private:
     void resetIqStreamBookkeeping();
     int  achievedIqSampleRate() const;
     int  effectiveIqSampleRate() const;
+    int  hostIqOutputRate() const;
     void announceEffectiveIqSampleRate();
+    // Host IQ (no DAX IQ plane): the backend's tap per slice, kept equal to
+    // the slices the subscribed receivers resolve to. keepSliceId is one being
+    // armed whose client has not recorded the receiver yet.
+    bool armHostIq(int trx);
+    void reconcileHostIqTaps(int keepSliceId = -1);
 
     void syncClient(const ClientState& client);
     void syncLineOutClient(const ClientState& client);
@@ -390,6 +414,8 @@ private:
 
     void resolvePeerProcess(TciClient* ws);   // #5087, off-thread lookup
     void ensureDaxForTci();
+    // First DAX channel no slice of ours and no reserved slot holds; 0 if none.
+    static int freeDaxChannelForTci(const RadioModel& model);
     void releaseDaxForTci();
     void scheduleDaxRelease();   // debounced releaseDaxForTci — cancel on reconnect
     void cancelDaxRelease();
@@ -416,10 +442,15 @@ private:
     // receiver whose create was lost or which outlived a stop()/start() cycle.
     QSet<int>          m_tciIqChannels;      // 1-based channels TCI created
     QSet<int>          m_iqCreateInFlight;   // create issued, status not yet seen
-    QSet<int>          m_pendingIqRemovals;  // awaiting a create status to reap
     QHash<QString,int> m_iqPanChannel;       // panId → TCI-owned DAX IQ channel
     int                m_announcedIqSampleRate{48000};
     int                m_iqSampleRate{48000};// shared requested rate, all TCI receivers
+    QSet<int>          m_hostIqSlices;       // slices whose backend IQ tap TCI holds on
+    int                m_hostIqRate{0};      // rate of the last host IQ frame, 0 = none yet
+    // Host IQ arrives at the radio's rate (its pan span); each tapped slice
+    // is brought down to the requested m_iqSampleRate before it is sent.
+    QHash<int, TciIqDecimator> m_hostIqDecimators;   // sliceId → its decimator
+    std::vector<float> m_hostIqOut;                  // reused output buffer
     QHash<QString, long long> m_lastDdsCenterHz; // panId → last broadcast dds center, gates zoom-only re-emits (#3910)
     TciRoutingState m_routingState;
     // #4567: stable sliceId→trx receiver bindings. Acquired on sliceAdded,
@@ -456,6 +487,9 @@ private:
         QPointer<TciClient> client;
         TciProtocol::TrxRequest request;
         TxCoordinator::Request txRequest;
+        bool wantsAudio{false};
+        DaxTxAudioPermit daxPermit{DaxTxAudioPermit::blocked()};
+        bool waitingForDax{false};
     };
     std::optional<PendingTrxRequest> m_pendingTrxRequest;
     struct PendingRouteCommand
@@ -545,6 +579,13 @@ private:
     float             m_cachedSLevel[8]{-130,-130,-130,-130,-130,-130,-130,-130};
     float             m_cachedFwdPower{0};
     float             m_cachedSwr{1.0f};
+    // tx_sensors' SWR goes through the same validity gate as the S-meter (see
+    // the txMetersChanged hookup); reset on every un-key edge. The sentinel
+    // value for a confirmed below-unity reading is TCI's own: the S-meter
+    // pegs at its scale end (3), TCI reports 10.
+    static constexpr float kTciMaximumSwr = 10.0f;
+    RadioSwrValidityFilter m_txSwrFilter;
+    QElapsedTimer     m_txSwrClock;
     float             m_cachedMicLevel{-50.0f};
     float             m_cachedAlc{0.0f};       // SW-ALC peak, dBFS
 };

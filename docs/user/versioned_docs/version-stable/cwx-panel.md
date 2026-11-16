@@ -36,11 +36,17 @@ The CWX panel and the [DVK Panel](./dvk-panel.md) share the same space — openi
 
 The panel has three views, chosen with the buttons at its top: **Send**, **Live** and **Setup** (see [Views](#views)). In **Send**, type text and send it; sent text appears as history bubbles above the entry line. In **Live**, characters are keyed as you type them.
 
-**Speed** sets the keyer speed in WPM (5–100 on FlexRadio).
+**Speed** sets the keyer speed in WPM (5–100 on FlexRadio). With several speed edits pending, a delayed status echo from an earlier edit does not cancel your newer request.
+
+When disconnected, **Speed**, **Delay**, **QSK** and macro edits remain local
+drafts. Reconnecting reads the radio's current settings; it does not send those
+draft settings automatically.
 
 Right-click a sent bubble for **Resend** (sent again exactly as typed, per-word speed changes included) or **Clear History**.
 
-When the CWX queue empties, AetherSDR releases the transmitter straight away, so the radio returns to receive right after the last character.
+When the CWX queue empties, AetherSDR releases its text-send intent. A separately held **MOX** remains on; otherwise the radio returns to receive after the last character. **Escape** cancels queued text and its local sidetone without releasing a separately held **MOX**.
+
+Text is not automatically resent after a lost connection. Reconnect before starting a new send.
 
 ### Macros and shortcuts
 
@@ -62,6 +68,14 @@ Beyond text entry, AetherSDR has a local iambic / straight-key keyer that respec
 | **Trigger CW Right Paddle** (dahs) | unbound |
 
 Bind keys under **Settings → Configure Shortcuts...** and turn on **Settings → Keyboard Shortcuts** (off by default), or map a MIDI control in [MIDI Controller Mapping](./midi-controller-mapping.md). Further CW actions include speed up/down, sidetone, iambic on/off, iambic mode A/B, swap paddles and break-in.
+
+The keyboard map binds the left and right **CTRL**, **SHIFT** and **ALT** keys separately, so a USB Morse adapter that types left/right Ctrl for its two paddles can drive dit and dah. A left or right key can only trigger the hold actions (the CW keys, PTT hold and Monitor hold), on its own, without other modifiers. An existing binding to plain Ctrl still answers either side; on a cap that has no binding of its own, the Key label says "plain Ctrl, both sides", and Clear or Reset there changes that shared binding. While a paddle is held, Ctrl is down for the whole app, so Ctrl+wheel and Ctrl+click on the panadapter behave as Ctrl-modified during keying.
+
+Platform limits for a squeeze (both paddles held):
+
+- **Windows** does not report the second Ctrl press while the first is held, and with both Shift keys held it does not report the first one released. AetherSDR reads the other side's state from Windows on every event of that modifier, so the hidden edge is recognized when the other key changes, not at the moment it happens.
+- **macOS** reports nothing for the second Ctrl while the first is held, so a squeeze cannot be keyed. Releasing the last Ctrl always releases both paddles.
+- **Linux** reports every press and release.
 
 - With **break-in** on, a paddle or straight-key press keys the radio directly. With break-in off, MOX must be on for the CW to go out.
 - Element timing is scheduled against an exact clock with a sample-accurate sidetone, and iambic Mode B behaves correctly when both paddles are released together.
@@ -90,6 +104,8 @@ To watch your own sending, turn on the **TX** decode of the [CW Decoder](./cw-de
 | **QSK** | Full break-in on or off |
 | **Step** | How many WPM each `+` or `-` speed prefix changes the speed (1–20) |
 | **F1–F12** | Twelve macro texts |
+
+**Delay** follows the radio's break-in delay. AetherSDR does not push a default or enforce a minimum when you connect.
 
 ### Special characters
 
@@ -128,6 +144,18 @@ Break-in is off, so the keyer waits for MOX.
 
 1. Turn on **break-in**, or turn on MOX before keying.
 2. Check that **TUNE** is off; CW keying is locked out while it is on.
+
+### CWX reports invalid text or too many unacknowledged speed changes
+
+Pasted control characters are refused. A batch is also cancelled if more than
+256 speed changes remain unacknowledged by the radio. At that limit, further
+**Speed** edits are refused without cancelling the existing batch; wait for the
+radio to acknowledge changes before trying again.
+
+1. Remove control characters from the text, or shorten the message and reduce
+   per-word speed changes.
+2. Check the radio connection before starting a new send. Cancelled text is not
+   resent automatically.
 
 ## See also
 

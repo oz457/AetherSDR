@@ -1,4 +1,5 @@
 #include "SpectrumWidget.h"
+#include "SpectrumTraceBins.h"
 #include "SpectrumChromeGeometry.h"
 #include "SpectrumSquelchLogic.h"
 #include "ScopedChildWidget.h"
@@ -79,6 +80,7 @@
 #include <QStringList>
 #include <QUrl>
 #include "core/AppSettings.h"
+#include "WsjtxOverlayConfig.h"
 #include "core/DisplayPresence.h"
 #include "core/KiwiSdrProtocol.h"
 #include "InteractionSettings.h"
@@ -1165,8 +1167,27 @@ QVariantMap SpectrumWidget::panstatsSnapshot(bool reset)
         causes[QString::fromLatin1(it.key())] = static_cast<qulonglong>(it.value());
     m[QStringLiteral("overlayDirtyCauses")] = causes;
 
-    if (reset)
+    if (!m_submissionIntervalsNs.isEmpty()) {
+        QVector<qint64> sorted = m_submissionIntervalsNs;
+        std::sort(sorted.begin(), sorted.end());
+        const auto percentileMs = [&sorted](double p) {
+            const qsizetype index = std::min(sorted.size() - 1,
+                static_cast<qsizetype>(std::ceil(p * sorted.size()) - 1));
+            return sorted[index] / 1.0e6;
+        };
+        m[QStringLiteral("submissionIntervalP50Ms")] = percentileMs(0.50);
+        m[QStringLiteral("submissionIntervalP95Ms")] = percentileMs(0.95);
+        m[QStringLiteral("submissionIntervalP99Ms")] = percentileMs(0.99);
+        m[QStringLiteral("submissionIntervalMaxMs")] = sorted.last() / 1.0e6;
+        m[QStringLiteral("submissionIntervalSamples")] = sorted.size();
+        m[QStringLiteral("submissionIntervalSaturated")] =
+            sorted.size() >= kMaxSubmissionIntervals;
+    }
+    if (reset) {
         m_panStats.reset();
+        m_submissionIntervalsNs.clear();
+        m_submissionClock.invalidate();
+    }
     return m;
 }
 
@@ -1816,6 +1837,44 @@ QVariantMap SpectrumWidget::automationDisplaySettingsSnapshot() const
     return snap;
 }
 
+void SpectrumWidget::noteTraceGeometryRequest(double centerMhz, double bandwidthMhz)
+{
+    if (panGeometryConfirmationRequired()) {
+        m_traceCapture.noteRequestSent(centerMhz, bandwidthMhz);
+    } else {
+        noteTraceGeometryChange();
+    }
+}
+
+bool SpectrumWidget::traceGeometryInFlight() const
+{
+    return m_draggingPan || m_draggingBandwidth || m_panDragPendingCenterValid
+        || m_frequencyRangeSettlePending || m_frequencyRangeCommandThrottle.hasPending();
+}
+
+QVariantMap SpectrumWidget::traceBinsSnapshot() const
+{
+    // The last decoded radio frame as received (never smoothed, reprojected or
+    // cropped) with the geometry shown when it arrived, or a refusal while
+    // that geometry cannot be trusted. It stays the radio's frame while a
+    // Kiwi source is displayed.
+    const bool panAnimationRunning =
+        m_panCenterAnim && m_panCenterAnim->state() != QAbstractAnimation::Stopped;
+    const QString refusal = m_traceCapture.refusal(m_centerMhz, m_bandwidthMhz,
+                                                   panAnimationRunning,
+                                                   traceGeometryInFlight());
+    QVariantMap m;
+    if (refusal.isEmpty()) {
+        m = m_traceCapture.snapshot();
+    } else {
+        m[QStringLiteral("refusal")] = refusal;
+    }
+    m[QStringLiteral("panIndex")] = m_panIndex;
+    m[QStringLiteral("name")] = objectName();
+    m[QStringLiteral("kiwiWaterfallActive")] = m_kiwiSdrWaterfallActive;
+    return m;
+}
+
 QVariantMap SpectrumWidget::traceDebugSnapshot()
 {
     const auto vectorStats = [this](const QVector<float>& bins) {
@@ -1968,6 +2027,30 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
     m_panStats.clock.start();  // panstats rates are meaningless without an epoch
 
+    // A requested range can reach the radio before the widget shows it.
+    connect(this, &SpectrumWidget::frequencyRangeChangeRequested, this,
+            [this](double centerMhz, double bandwidthMhz) {
+                noteTraceGeometryRequest(centerMhz, bandwidthMhz);
+            });
+    connect(this, &SpectrumWidget::centerChangeRequested, this,
+            [this](double centerMhz) { noteTraceGeometryRequest(centerMhz, m_bandwidthMhz); });
+    // An unchanged centre is a slice tune only (driveVfoDragTune); MainWindow
+    // sends no pan command for it, so it is no geometry request.
+    connect(this, &SpectrumWidget::edgePanTuneRequested, this,
+            [this](double centerMhz, double) {
+                if (!qFuzzyCompare(centerMhz, m_centerMhz)) {
+                    noteTraceGeometryRequest(centerMhz, m_bandwidthMhz);
+                }
+            });
+
+#ifdef AETHER_GPU_SPECTRUM
+    connect(this, &QRhiWidget::frameSubmitted, this, [this] {
+        if (m_submissionClock.isValid() && m_submissionIntervalsNs.size() < kMaxSubmissionIntervals) {
+            m_submissionIntervalsNs.append(m_submissionClock.nsecsElapsed());
+        }
+        m_submissionClock.restart();
+    });
+#endif
     setMinimumHeight(100);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setAutoFillBackground(false);
@@ -1991,11 +2074,8 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
     // Explicitly request Metal on macOS.
 #  ifdef Q_OS_MACOS
     setApi(QRhiWidget::Api::Metal);
-    // WA_NativeWindow gives this widget its own NSView; without it QRhiWidget
-    // can't get a Metal QRhi when the parent's surface is RasterSurface (#714).
-    // It costs a raster flushSubWindow blend per present;
-    // AETHER_PAN_NO_NATIVE_WINDOW=1 skips it. Paired with
-    // WA_DontCreateNativeAncestors so ancestors stay non-native (#4339).
+    // Share top-level Metal composition on the required Qt 6.12 stack.
+    // The native diagnostic override stays paired with ancestor isolation (#4339).
     applyNativeWindowIsolationPolicy();
 #  else
     // AETHER_NO_GPU / QT_OPENGL=software: force the OpenGL QRhi backend so the
@@ -2328,6 +2408,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         }
         m_centerMhz = newCenter;
         m_bandwidthMhz = newBw;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
@@ -2607,6 +2688,9 @@ void SpectrumWidget::loadSettings()
         m_kiwiSdrWaterfallActive ? m_kiwiDssFloorDepth : m_flexDssFloorDepth);
     m_singleClickTune = s.value("SingleClickTune", "False").toString() == "True";
     m_showTuneGuides  = s.value("ShowTuneGuides", "False").toString() == "True";
+    // Per-pan (not global like the flat keys above) — see setShowWsjtxFreq().
+    // Read from the Principle V config object, not a flat key.
+    m_showWsjtxFreq   = wsjtxOverlayShowFreq(m_panIndex);
     m_extendedFrequencyLine = s.value("ExtendedFrequencyLine", "False").toString() == "True";
     m_extendedPassband = DisplaySettings::extendedPassband();
     m_extendedTnf = DisplaySettings::extendedTnf();
@@ -4394,6 +4478,18 @@ void SpectrumWidget::propagateGlobalDisplayToggle(
             applyToSibling(sw);
         }
     }
+}
+
+void SpectrumWidget::setShowWsjtxFreq(bool on) {
+    // Deliberately per-pan, NOT propagated to siblings (unlike
+    // setShowTuneGuides/setExtendedFrequencyLine above) — see the header
+    // comment. Persisted via the WsjtxOverlay config object (WsjtxOverlayConfig.h),
+    // keyed by pan index.
+    m_showWsjtxFreq = on;
+    wsjtxOverlaySetShowFreq(m_panIndex, on);  // Principle V: writes to owned config object
+    if (on)
+        emit wsjtxListenerNeeded();  // Start listener mid-session if not running (#4526)
+    markOverlayDirty();
 }
 
 void SpectrumWidget::setExtendedFrequencyLine(bool on) {
@@ -6742,6 +6838,7 @@ void SpectrumWidget::clearDisplay()
     clearFrequencyPreview();
     m_bins.clear();
     m_smoothed.clear();
+    m_traceCapture.clear();
     clearWaterfallRows();
     m_hasNativeWaterfall = false;
     m_lastNativeTileMs = 0;
@@ -7787,6 +7884,7 @@ void SpectrumWidget::cancelPanGeometryRequests()
     m_frequencyRangePendingValid = false;
     m_frequencyRangeCommandThrottle.clear();
     m_frequencyRangeCommandClock.invalidate();
+    m_traceCapture.cancelRequest();
     for (QTimer* timer : {m_panDragSettleTimer, m_frequencyRangeSettleTimer,
                          m_frequencyRangeCommandTimer, m_vfoDragEdgePanTimer}) {
         if (timer) { timer->stop(); }
@@ -7849,6 +7947,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
                                                bool animateSmallNudges,
                                                bool confirmedObservation)
 {
+    m_traceCapture.noteRangeObserved(centerMhz, bandwidthMhz);
     if (centerMhz == m_centerMhz && bandwidthMhz == m_bandwidthMhz)
         return;
 
@@ -7934,6 +8033,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
 
     if (bwChanged) {
         m_bandwidthMhz = bandwidthMhz;
+        noteTraceGeometryChange();
     }
 
     if (largeShift || !animateSmallNudges) {
@@ -7960,6 +8060,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         }
         m_centerMhz       = centerMhz;
         m_panCenterTarget = centerMhz;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (m_radioOwnsDbmScale && !m_panBinsAbsolute && !m_kiwiSdrWaterfallActive) {
             prepareForFftScaleChange();
@@ -8012,11 +8113,13 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
         connect(m_panCenterAnim, &QVariantAnimation::valueChanged, this,
             [this](const QVariant& v) {
                 m_centerMhz = v.toDouble();
+                noteTraceGeometryChange();
                 markOverlayDirty();
             });
         connect(m_panCenterAnim, &QVariantAnimation::finished, this,
             [this]() {
                 m_centerMhz = m_panCenterTarget;  // land exactly on target
+                noteTraceGeometryChange();
                 markOverlayDirty();
             });
     }
@@ -8029,6 +8132,7 @@ void SpectrumWidget::setFrequencyRangeInternal(double centerMhz, double bandwidt
     m_panCenterAnim->setStartValue(m_centerMhz);
     m_panCenterAnim->setEndValue(centerMhz);
     m_panCenterAnim->setDuration(110);
+    noteTraceGeometryChange();
     m_panCenterAnim->start();
     emit frequencyRangeChanged(centerMhz, m_bandwidthMhz);
 }
@@ -8614,7 +8718,8 @@ void SpectrumWidget::setSliceInfo(int sliceId, bool isTxSlice)
     if (idx >= 0) { m_sliceOverlays[idx].isTxSlice = isTxSlice; markOverlayDirty(); }
 }
 
-void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale)
+void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const SpectrumDecodeScale& decodeScale,
+                                    bool heldForPresentation)
 {
     ++m_fftFrameSequence;
     PerfUpdateScope perfScope(PerfUpdateScope::Kind::Panadapter);
@@ -8684,6 +8789,16 @@ void SpectrumWidget::updateSpectrum(const QVector<float>& binsDbm, const Spectru
             }
         }
     }
+
+    // The frame's own decode scale when the stream reports one, else the
+    // encoder range the widget holds as the frame arrives.
+    const SpectrumTraceBins::FrameCapture::Encoder traceEncoder = decodeScale.valid()
+        ? SpectrumTraceBins::FrameCapture::Encoder{true, decodeScale.minDbm,
+                                                   decodeScale.maxDbm, m_encoderYPixels}
+        : SpectrumTraceBins::FrameCapture::Encoder{m_encoderRangeValid, m_encoderMinDbm,
+                                                   m_encoderMaxDbm, m_encoderYPixels};
+    m_traceCapture.ingest(binsDbm, m_fftFrameSequence, m_centerMhz, m_bandwidthMhz,
+                          spectrumBins == &adjustedBins, traceEncoder, heldForPresentation);
 
     if (m_resetFftSmoothingOnNextFrame || !m_clientFftSmoothing) {
         m_smoothed = *spectrumBins;
@@ -10440,6 +10555,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
                     [this, freq = so.freqMhz]{
                         if (!panGeometryConfirmationRequired()) {
                             m_centerMhz = freq;
+                            noteTraceGeometryChange();
                             markOverlayDirty();
                         }
                         emit centerChangeRequested(freq);
@@ -10643,6 +10759,16 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* ev)
             tuneGuideAction->setCheckable(true);
             tuneGuideAction->setChecked(m_showTuneGuides);
             connect(tuneGuideAction, &QAction::toggled, this, &SpectrumWidget::setShowTuneGuides);
+
+            // #4526: lives next to Show Tune Guides rather than a Spots-dialog
+            // checkbox, but unlike Show Tune Guides this is per-PAN, not
+            // global — showing it on the 20 m pan while hiding it on the
+            // 40 m pan is the normal case for a two-slice/two-instance WSJT-X
+            // setup. See SpectrumWidget::setShowWsjtxFreq().
+            QAction* wsjtxFreqAction = menu.addAction("Show WSJT-X Rx/Tx Frequency");
+            wsjtxFreqAction->setCheckable(true);
+            wsjtxFreqAction->setChecked(m_showWsjtxFreq);
+            connect(wsjtxFreqAction, &QAction::toggled, this, &SpectrumWidget::setShowWsjtxFreq);
 
             QAction* extendedLineAction = menu.addAction("Extended Frequency Line");
             extendedLineAction->setCheckable(true);
@@ -10902,6 +11028,7 @@ void SpectrumWidget::edgePanVelocityStep()
     if (!panGeometryConfirmationRequired()) {
         reprojectWaterfall(m_centerMhz, m_bandwidthMhz, newCenter, m_bandwidthMhz);
         m_centerMhz = newCenter;
+        noteTraceGeometryChange();
         markOverlayDirty();
     }
 
@@ -11044,6 +11171,7 @@ void SpectrumWidget::applyPanDragCenter(double newCenterMhz, bool force)
         }
 
         m_centerMhz = newCenterMhz;
+        noteTraceGeometryChange();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
         } else {
@@ -11327,6 +11455,7 @@ void SpectrumWidget::mouseMoveEvent(QMouseEvent* ev)
         }
         m_bandwidthMhz = newBw;
         m_centerMhz = zoomCenter;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
@@ -12117,6 +12246,7 @@ bool SpectrumWidget::applyAnchoredZoom(double bandwidthFactor,
     }
     m_bandwidthMhz = newBw;
     m_centerMhz = newCenter;
+    noteTraceGeometryChange();
     resetNoiseFloorBaseline();
     if (previewed) {
         scheduleFrequencyPreviewFrame();
@@ -12317,6 +12447,7 @@ void SpectrumWidget::wheelEvent(QWheelEvent* ev)
         }
         m_centerMhz    = newCenter;
         m_bandwidthMhz = newBw;
+        noteTraceGeometryChange();
         resetNoiseFloorBaseline();
         if (previewed) {
             scheduleFrequencyPreviewFrame();
@@ -14686,6 +14817,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb,
             }
             drawSwrSweep(frequencyPainter, specRect);
             drawSliceMarkers(frequencyPainter, specRect, wfRect);
+            drawWsjtxMarkers(frequencyPainter, specRect, wfRect);
             drawOffScreenSlices(frequencyPainter, specRect);
 
             m_overlayStatic.fill(Qt::transparent);
@@ -15875,6 +16007,7 @@ void SpectrumWidget::paintEvent(QPaintEvent* ev)
     if (m_showSpots || m_showSHistory) drawSpotMarkers(p, specRect);
     drawSwrSweep(p, specRect);
     drawSliceMarkers(p, specRect, wfRect);
+    drawWsjtxMarkers(p, specRect, wfRect);  // CPU path: GPU path adds this in renderGpuFrame()
     drawSmartMtrValueLabels(p);
     drawOffScreenSlices(p, specRect);
 
@@ -16446,6 +16579,34 @@ void SpectrumWidget::setSpotMarkers(const QVector<SpotMarker>& markers)
 
     const bool visualChange = !spotMarkersVisuallyEqual(m_spotMarkers, markers);
     m_spotMarkers = markers;
+    if (!visualChange) {
+        return;
+    }
+    markOverlayDirty();
+}
+
+void SpectrumWidget::setWsjtxMarkers(const QVector<WsjtxMarker>& markers)
+{
+    // MainWindow pushes an updated list on every WSJT-X Status (roughly once
+    // per decode cycle, more often while transmitting) — skip the overlay
+    // texture rebuild when nothing actually moved, matching setSpotMarkers()
+    // above.
+    const bool visualChange = [&] {
+        if (m_wsjtxMarkers.size() != markers.size()) return true;
+        for (int i = 0; i < markers.size(); ++i) {
+            const auto& a = m_wsjtxMarkers.at(i);
+            const auto& b = markers.at(i);
+            if (a.id != b.id || a.transmitting != b.transmitting ||
+                a.mode != b.mode ||
+                std::abs(a.dialFreqHz - b.dialFreqHz) > 0.5 ||
+                std::abs(a.rxFreqHz - b.rxFreqHz) > 0.5 ||
+                std::abs(a.txFreqHz - b.txFreqHz) > 0.5) {
+                return true;
+            }
+        }
+        return false;
+    }();
+    m_wsjtxMarkers = markers;
     if (!visualChange) {
         return;
     }
@@ -18121,6 +18282,145 @@ void SpectrumWidget::drawSliceMarkers(QPainter& p, const QRect& specRect, const 
         if (!so.isActive) drawOne(so);
     for (const auto& so : m_sliceOverlays)
         if (so.isActive) drawOne(so);
+}
+
+// ─── WSJT-X Rx/Tx frequency overlay (#4526) ───────────────────────────────────
+//
+// Deliberately its own draw path rather than routed through drawSpotMarkers():
+// this is the digital-mode program's live Rx/Tx position (persistent lines,
+// like a slice VFO marker), not a fading DX spot, and the issue calls out
+// that the two must stay visually distinct so operators don't confuse a
+// bandmap tick with "this is where WSJT-X is right now". Decoded-station
+// markers are unaffected — those already exist via SpotHub's WSJT-X feed and
+// drawSpotMarkers(), per the triage on #4526.
+// Occupied-bandwidth widths per WSJT-X mode, used to render each Rx/Tx cue as
+// a double line (two edges) instead of a single center line. These are fixed
+// protocol values (not derived from tone/symbol-rate math) per operator
+// direction, 2026-09-16.
+constexpr double kWsjtxFt8WidthHz = 50.0;
+constexpr double kWsjtxFt4WidthHz = 90.0;
+constexpr double kWsjtxFt2WidthHz = 150.0;
+
+namespace {
+double wsjtxModeWidthHz(const QString& mode)
+{
+    if (mode.compare(QStringLiteral("FT4"), Qt::CaseInsensitive) == 0) {
+        return kWsjtxFt4WidthHz;
+    }
+    if (mode.compare(QStringLiteral("FT2"), Qt::CaseInsensitive) == 0) {
+        return kWsjtxFt2WidthHz;
+    }
+    // FT8 and any unrecognized/empty mode string both fall back to the FT8
+    // width rather than a single line, so an unknown mode still renders a
+    // sensible bracket instead of silently changing shape.
+    return kWsjtxFt8WidthHz;
+}
+} // namespace
+
+void SpectrumWidget::drawWsjtxMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
+{
+    if (!m_showWsjtxFreq || m_wsjtxMarkers.isEmpty() ||
+            (specRect.isEmpty() && wfRect.isEmpty())) {
+        return;
+    }
+
+    const double startMhz = m_centerMhz - effectiveBandwidthMhz() / 2.0;
+    const double endMhz   = m_centerMhz + effectiveBandwidthMhz() / 2.0;
+
+    // docs/style/theme-style-guide.md names these roles explicitly:
+    // Receive / RX marker → color.highlight.rx
+    // Transmit-active / TX marker → color.highlight.tx
+    const QColor rxColor = AetherSDR::ThemeManager::instance().color("color.highlight.rx");
+    const QColor txColor = AetherSDR::ThemeManager::instance().color("color.highlight.tx");
+
+    // Draw on both the panadapter (specRect) and the waterfall (wfRect) as
+    // approved in RFC #5586: same per-pan toggle, same color tokens.
+    // Maintainer ruling (RFC #6999, 2026-11-14): omit markers on the 3D (DSS)
+    // panadapter entirely; the waterfall always keeps them.
+    const bool is3D = (m_spectrumRenderMode == SpectrumRenderMode::Mode3D);
+    auto drawFrequencyLine = [&](int x, const QColor& col) {
+        p.setPen(QPen(col, 1));
+        if (!specRect.isEmpty() && !is3D && x >= specRect.left() && x <= specRect.right()) {
+            p.drawLine(x, specRect.top(), x, specRect.bottom());
+        }
+        if (!wfRect.isEmpty() && x >= wfRect.left() && x <= wfRect.right()) {
+            p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+        }
+    };
+
+    // Double line: one at each edge of the mode's occupied bandwidth,
+    // freqMhz is the lower audio edge of the signal (WSJT-X "Rx DF" convention
+    // reports the start of the decode subband, not the center). Draw one line
+    // at the lower edge and one at the upper edge so the signal occupies the
+    // space between them.
+    auto drawModeWidthLines = [&](double freqMhz, const QColor& col, const QString& mode) {
+        const double widthHz = wsjtxModeWidthHz(mode);
+        drawFrequencyLine(mhzToX(freqMhz), col);
+        drawFrequencyLine(mhzToX(freqMhz + widthHz / 1.0e6), col);
+    };
+
+    p.save();
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(10);
+    labelFont.setBold(true);
+    p.setFont(labelFont);
+    const QFontMetrics fm(labelFont);
+    // Keep the spectrum label below the VFO flags, whose height follows the
+    // current page and display scale. The waterfall label stays at its top.
+    int flagHeight = 0;
+    for (const VfoWidget* flag : std::as_const(m_vfoWidgets)) {
+        if (flag->isVisible()) {
+            flagHeight = std::max(flagHeight, flag->height());
+        }
+    }
+    const int specLabelTop = specRect.top() + flagTopPad() + flagHeight + 3;
+    auto drawLabel = [&](const QRect& rect, int x, int top, const QString& text) {
+        if (rect.isEmpty() || top + fm.height() > rect.bottom()) {
+            return;
+        }
+        p.save();
+        p.setClipRect(rect, Qt::IntersectClip);
+        const int rightmostX = std::max(rect.left(), rect.right() - fm.horizontalAdvance(text));
+        p.drawText(std::clamp(x, rect.left(), rightmostX), top + fm.ascent(), text);
+        p.restore();
+    };
+
+    for (const auto& marker : std::as_const(m_wsjtxMarkers)) {
+        // No dial-frequency gate here: WSJT-X Rx DF is an audio offset above
+        // the dial, so an operator zoomed into the passband will have the dial
+        // off-screen while the Rx/Tx brackets are on-screen. Filtering on the
+        // dial would hide the markers exactly when the operator is most zoomed
+        // in. Each line is already span-checked individually below.
+        const double rxMhz = marker.rxFreqHz / 1.0e6;
+        const double modeWidthMhz = wsjtxModeWidthHz(marker.mode) / 1.0e6;
+        // Interval intersection: draw if any part of [lower, upper] is visible.
+        // A lower-edge-only check hides the whole bracket when zoomed so that
+        // only the upper edge is on screen.
+        if (rxMhz <= endMhz && rxMhz + modeWidthMhz >= startMhz) {
+            drawModeWidthLines(rxMhz, rxColor, marker.mode);
+            p.setPen(rxColor);
+            // Keep the text clear of the bracket's upper edge.
+            const int labelX = mhzToX(rxMhz + modeWidthMhz) + 3;
+            const QString label = QString::number(marker.rxFreqHz - marker.dialFreqHz, 'f', 0) + " Hz";
+            drawLabel(wfRect, labelX, wfRect.top() + 3, label);
+            if (!is3D) {
+                drawLabel(specRect, labelX, specLabelTop, label);
+            }
+        }
+
+        // Tx marker only when it means something: actively transmitting, or
+        // split (Tx differs from Rx) so a QSY-in-progress Reply doesn't read
+        // as a permanent second marker sitting on top of Rx (issue: "a
+        // distinct marker at Tx frequency when it differs").
+        const bool txDiffersFromRx = std::abs(marker.txFreqHz - marker.rxFreqHz) > 1.0;
+        if (marker.transmitting || txDiffersFromRx) {
+            const double txMhz = marker.txFreqHz / 1.0e6;
+            if (txMhz <= endMhz && txMhz + modeWidthMhz >= startMhz) {
+                drawModeWidthLines(txMhz, txColor, marker.mode);
+            }
+        }
+    }
+    p.restore();
 }
 
 // ─── Frequency scale bar ──────────────────────────────────────────────────────
