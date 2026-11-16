@@ -297,7 +297,7 @@ void TciApplet::buildUI()
     m_txVoiceDsp->setAccessibleName(tr("Send TCI audio through AetherTX DSP"));
     m_txVoiceDsp->setAccessibleDescription(tr(
         "When on, audio a TCI client transmits goes through the same TX chain as "
-        "the microphone: gate, EQ, de-esser, compressor, tube, enhancer, reverb and the "
+        "the microphone: EQ, compressor, tube, enhancer, reverb and the "
         "final limiter. For voice clients such as remote-operation apps. Leave it off "
         "for digital modes (WSJT-X, JTDX, fldigi): their tones must not be processed. "
         "DAX audio is never affected. Off by default."));
@@ -305,26 +305,18 @@ void TciApplet::buildUI()
         "<b>Send TCI audio through AetherTX DSP</b><br><br>"
         "Off: audio a TCI client transmits goes to the radio as it is. This is "
         "what digital modes (WSJT-X, JTDX, fldigi) need.<br><br>"
-        "On: that audio goes through the same TX chain as the microphone (gate, "
-        "EQ, de-esser, compressor, tube, enhancer, reverb, final limiter). For "
+        "On: that audio goes through the same TX chain as the microphone (EQ, "
+        "compressor, tube, enhancer, reverb, final limiter). For "
         "voice clients such as remote-operation apps.<br><br>"
         "DAX audio is never affected."));
     m_txVoiceDsp->setStyleSheet(kGreenToggle);
     m_txVoiceDsp->setFixedHeight(22);
-    {
-        const QSignalBlocker blocker(m_txVoiceDsp);
-        m_txVoiceDsp->setChecked(
-            AppSettings::instance().value("TciTxVoiceDsp", "False").toString() == "True");
-    }
+    // TciServer owns the setting (Tci.TxVoiceDsp); the button shows it once a
+    // server is attached.
+    m_txVoiceDsp->setEnabled(false);
     txDspRow->addWidget(m_txVoiceDsp, 1);
     connect(m_txVoiceDsp, &QPushButton::toggled, this, [this](bool on) {
-        if (m_tciServer) {
-            m_tciServer->setTxVoiceDsp(on);
-        } else {
-            auto& ss = AppSettings::instance();
-            ss.setValue("TciTxVoiceDsp", on ? "True" : "False");
-            ss.save();
-        }
+        if (m_tciServer) { m_tciServer->setTxVoiceDsp(on); }
     });
     // Test build only: HL2 TXA leveler max gain, live. 15 dB is Thetis's
     // default; lower keeps room noise between words from being pumped up.
@@ -715,9 +707,10 @@ void TciApplet::setTciServer(TciServer* tci)
         const QSignalBlocker blocker(m_lineOutPcAudioOffConsent);
         m_lineOutPcAudioOffConsent->setChecked(tci && tci->lineOutPcAudioOffConsent());
     }
-    if (tci) {
+    {
         const QSignalBlocker blocker(m_txVoiceDsp);
-        m_txVoiceDsp->setChecked(tci->txVoiceDsp());
+        m_txVoiceDsp->setChecked(tci && tci->txVoiceDsp());
+        m_txVoiceDsp->setEnabled(tci != nullptr);
     }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
