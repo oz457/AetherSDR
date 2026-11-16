@@ -448,38 +448,30 @@ void TciApplet::buildUI()
         m_tciEnable->setChecked(tciAutoStart);
     }
 
-    // EXPERIMENT (kurt-experiments): RX via AetherRX, see TciServer::setRxViaAetherRx.
-    m_rxViaAetherRx = new QPushButton(tr("Send AetherRX DSP audio over TCI"));
-    m_rxViaAetherRx->setCheckable(true);
-    m_rxViaAetherRx->setObjectName(QStringLiteral("tciRxViaAetherRx"));
-    m_rxViaAetherRx->setAccessibleName(tr("Send AetherRX DSP audio over TCI"));
-    m_rxViaAetherRx->setToolTip(tr(
-        "<b>Send AetherRX DSP audio over TCI</b> (experimental)<br><br>"
-        "Off: TCI clients get the slice audio straight from the radio, before "
-        "AetherRX. This is what digital-mode decoders (WSJT-X, JTDX) want.<br><br>"
-        "On: the TCI receiver of the active slice gets the audio you hear on "
-        "the PC, after AetherRX (NR2/NR4/RNNoise, EQ, gate, compressor, tube). "
-        "Slice volume and mute affect it; master volume does not.<br><br>"
-        "Needs PC audio on and a 24 or 48 kHz output device. When that audio "
-        "stops (TX, PC audio off) TCI falls back to the raw slice audio."));
-    m_rxViaAetherRx->setStyleSheet(kGreenToggle);
-    m_rxViaAetherRx->setFixedHeight(22);
-    {
-        QSignalBlocker b(m_rxViaAetherRx);
-        m_rxViaAetherRx->setChecked(
-            settings.value("TciRxViaAetherRx", "False").toString() == "True");
-    }
+    // Test build: the green button drives the #6864 setting (Tci.RxAudioSource);
+    // upstream shows it as the "RX audio through RX DSP (processed)" checkbox.
+    m_rxProcessed = new QPushButton(tr("Send AetherRX DSP audio over TCI"));
+    m_rxProcessed->setCheckable(true);
+    m_rxProcessed->setObjectName(QStringLiteral("tciRxProcessed"));
+    m_rxProcessed->setAccessibleName(tr("Send processed RX audio to TCI clients"));
+    m_rxProcessed->setToolTip(tr(
+        "<b>Send AetherRX DSP audio over TCI</b><br><br>"
+        "Off (raw): TCI clients get each slice's audio as the radio delivers it. "
+        "This is what digital-mode decoders (WSJT-X, JTDX, fldigi) need.<br><br>"
+        "On (processed): each slice's own audio first passes AetherRX, the noise "
+        "reduction and RX chain you hear locally. It is not the speaker mix and "
+        "does not need PC audio.<br><br>"
+        "When processed audio is not available (TX, a noise reduction still "
+        "starting, another sample rate) the raw audio takes over within half a "
+        "second. DAX-fed receivers and Line Out are not affected."));
+    m_rxProcessed->setStyleSheet(kGreenToggle);
+    m_rxProcessed->setFixedHeight(22);
+    m_rxProcessed->setEnabled(false);
     auto* dspRow = new QHBoxLayout;
     dspRow->setContentsMargins(4, 0, 4, 2);
-    dspRow->addWidget(m_rxViaAetherRx, 1);
-    connect(m_rxViaAetherRx, &QPushButton::toggled, this, [this](bool on) {
-        if (m_tciServer) {
-            m_tciServer->setRxViaAetherRx(on);
-        } else {
-            auto& ss = AppSettings::instance();
-            ss.setValue("TciRxViaAetherRx", on ? "True" : "False");
-            ss.save();
-        }
+    dspRow->addWidget(m_rxProcessed, 1);
+    connect(m_rxProcessed, &QPushButton::toggled, this, [this](bool on) {
+        if (m_tciServer) { m_tciServer->setRxAudioProcessed(on); }
     });
 
     enableRow->addWidget(m_tciEnable);
@@ -696,6 +688,7 @@ void TciApplet::setTciServer(TciServer* tci)
         disconnect(m_tciServer, &TciServer::lineOutIncludeTxChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::lineOutPcAudioOffConsentChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::txVoiceDspChanged, this, nullptr);
+        disconnect(m_tciServer, &TciServer::rxAudioProcessedChanged, this, nullptr);
         disconnect(m_tciServer, &TciServer::clientCountChanged, this, nullptr);
     }
     m_tciServer = tci;
@@ -712,6 +705,11 @@ void TciApplet::setTciServer(TciServer* tci)
         m_txVoiceDsp->setChecked(tci && tci->txVoiceDsp());
         m_txVoiceDsp->setEnabled(tci != nullptr);
     }
+    {
+        const QSignalBlocker blocker(m_rxProcessed);
+        m_rxProcessed->setChecked(tci && tci->rxAudioProcessed());
+        m_rxProcessed->setEnabled(tci != nullptr);
+    }
     if (m_lineOutAvailability) { m_lineOutAvailability->refreshEngaged(); }
     if (m_lineOutPcAudioOffAvailability) { m_lineOutPcAudioOffAvailability->refreshEngaged(); }
     updateLineOutToggle();
@@ -719,6 +717,10 @@ void TciApplet::setTciServer(TciServer* tci)
         connect(tci, &TciServer::txVoiceDspChanged, this, [this](bool on) {
             const QSignalBlocker blocker(m_txVoiceDsp);
             m_txVoiceDsp->setChecked(on);
+        });
+        connect(tci, &TciServer::rxAudioProcessedChanged, this, [this](bool on) {
+            const QSignalBlocker blocker(m_rxProcessed);
+            m_rxProcessed->setChecked(on);
         });
         connect(tci, &TciServer::lineOutIncludeTxChanged, this, [this](bool enabled) {
             const QSignalBlocker blocker(m_lineOutIncludeTx);

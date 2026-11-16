@@ -66,9 +66,9 @@ private:
     QPushButton* m_lineOutToggle{nullptr};   // "▸ Line Out recording" disclosure
     QWidget*     m_lineOutDrawer{nullptr};   // holds the two Line Out options
     QPushButton* m_txVoiceDsp{nullptr};
+    QPushButton* m_rxProcessed{nullptr};
     ControlAvailabilityRegistry* m_lineOutAvailability{nullptr};
     ControlAvailabilityRegistry* m_lineOutPcAudioOffAvailability{nullptr};
-    QPushButton* m_rxViaAetherRx{nullptr};  // experiment, kurt-experiments only
     QLineEdit*   m_tciPort{nullptr};
     QLabel*      m_tciStatus{nullptr};
 
