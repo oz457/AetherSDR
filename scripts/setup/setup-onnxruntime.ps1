@@ -40,10 +40,14 @@ New-Item -ItemType Directory -Force -Path "$OutDir\lib" | Out-Null
 New-Item -ItemType Directory -Force -Path "$OutDir\bin" | Out-Null
 
 # ── Download ─────────────────────────────────────────────────────────────
+# TEST BUILD ONLY: github.com/microsoft/onnxruntime answers 404 (2026-11-18),
+# so take the same 1.27.0 binaries from the official NuGet package instead.
+$NugetUrl    = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/${OrtVersion}/microsoft.ml.onnxruntime.${OrtVersion}.nupkg"
+$NugetSha256 = "c725e8cefdfe4de08befb9f79b3f218c162439cdcdb97cbbb5192888d58ea669"
 if (-not (Test-Path $ZipFile)) {
-    Write-Host "Downloading ONNX Runtime ${OrtVersion} prebuilt package..." -ForegroundColor Cyan
-    Invoke-WebRequest -Uri $OrtUrl -OutFile $ZipFile
-    Confirm-Sha256 -Path $ZipFile -Expected $OrtSha256
+    Write-Host "Downloading ONNX Runtime ${OrtVersion} NuGet package..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri $NugetUrl -OutFile $ZipFile
+    Confirm-Sha256 -Path $ZipFile -Expected $NugetSha256
 }
 
 # ── Extract ──────────────────────────────────────────────────────────────
@@ -52,28 +56,14 @@ $tempDir = "third_party\onnxruntime-temp"
 if (Test-Path $tempDir) { Remove-Item -Recurse -Force $tempDir }
 Expand-Archive -Path $ZipFile -DestinationPath $tempDir -Force
 
-$srcDir = Get-ChildItem "$tempDir\onnxruntime-win-x64-*" -Directory | Select-Object -First 1
-if (-not $srcDir) {
-    Write-Error "Could not find extracted onnxruntime directory in $tempDir"
+Copy-Item "$tempDir\build\native\include\*" "$OutDir\include\" -Recurse -Force
+$nat = "$tempDir\runtimes\win-x64\native"
+if (-not (Test-Path "$nat\onnxruntime.lib")) {
+    Write-Error "onnxruntime.lib not found in NuGet package"
     exit 1
 }
-
-# ── Copy headers ─────────────────────────────────────────────────────────
-# ONNX Runtime packages keep headers directly in include/
-Copy-Item "$($srcDir.FullName)\include\*" "$OutDir\include\" -Recurse -Force
-
-# ── Copy lib / DLL ───────────────────────────────────────────────────────
-# The prebuilt package puts .lib and .dll together in lib/
-$libFile = Get-ChildItem "$($srcDir.FullName)\lib" -Filter "onnxruntime.lib" | Select-Object -First 1
-$dllFiles = Get-ChildItem "$($srcDir.FullName)\lib" -Filter "*.dll"
-
-if (-not $libFile) {
-    Write-Error "onnxruntime.lib not found in extracted package"
-    exit 1
-}
-
-Copy-Item $libFile.FullName "$OutDir\lib\onnxruntime.lib"
-foreach ($dll in $dllFiles) {
+Copy-Item "$nat\onnxruntime.lib" "$OutDir\lib\onnxruntime.lib"
+foreach ($dll in Get-ChildItem $nat -Filter "*.dll") {
     Copy-Item $dll.FullName "$OutDir\bin\$($dll.Name)"
 }
 
