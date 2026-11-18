@@ -8,6 +8,7 @@
 #include "CanonIndicators.h"
 #include "core/AppSettings.h"
 #include "core/TciServer.h"
+#include "core/backends/hl2/Hl2TxTestKnobs.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -271,6 +272,26 @@ void TciApplet::buildUI()
             + canonIndicatorRules();
     });
     txDspRow->addWidget(m_txVoiceDsp);
+    // Test build only: record each over's TXA input and output as WAV files
+    // in the logs folder, for the #7379 A/B measurement.
+    auto* tapBox = new QCheckBox(tr("Record TX"), this);
+    tapBox->setObjectName(QStringLiteral("tciTestHl2TxTap"));
+    tapBox->setStyleSheet("QCheckBox { color: #8aa8c0; font-size: 11px; }");
+    tapBox->setToolTip(tr(
+        "<b>Record TX (test build)</b><br><br>"
+        "Writes every over as two WAV files in the AetherSDR logs folder: "
+        "txtap-...-in.wav (audio entering the HL2 TX modulator) and "
+        "txtap-...-iq.wav (the I/Q it sends to the radio)."));
+    tapBox->setChecked(
+        AppSettings::instance().value("TciTestHl2TxTap", "False").toString() == "True");
+    hl2::testknobs::txTapEnabled.store(tapBox->isChecked());
+    txDspRow->addWidget(tapBox);
+    connect(tapBox, &QCheckBox::toggled, this, [](bool on) {
+        hl2::testknobs::txTapEnabled.store(on);
+        auto& ss = AppSettings::instance();
+        ss.setValue("TciTestHl2TxTap", on ? "True" : "False");
+        ss.save();
+    });
     txDspRow->addStretch();
     outer->addLayout(txDspRow);
     connect(m_txVoiceDsp, &QCheckBox::toggled, this, [this](bool on) {

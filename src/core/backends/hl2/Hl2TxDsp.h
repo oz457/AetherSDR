@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/backends/hl2/Hl2TxAlc.h"
+#include "core/backends/hl2/Hl2TxTap.h"
 #include "core/dsp/WdspChannel.h"
 #include "core/backends/hl2/Hl2TxLevelPolicy.h"
 #include "core/TxCoordinator.h"
@@ -238,6 +239,12 @@ private:
     // never levelled as a different source. See processAudioBlock().
     TxAudioSource m_lastSource = TxAudioSource::Microphone;
     bool m_sourceChangeWarned = false;   // one warning per transmission
+    // Test build: per-over WAV tap of the TXA modulator's input and output.
+    Hl2TxWavTap m_tapIn;
+    Hl2TxWavTap m_tapIq;
+    std::vector<float> m_tapScratch;
+    void tapBlock(const float* in, std::size_t inFrames, const float* outI,
+                  const float* outQ, std::size_t outFrames);
     int m_upsample = 2;
     Hl2TxAlc m_alc;              // level chain; its gain carries across blocks
     unsigned long long m_modulatorGeneration = 0;
