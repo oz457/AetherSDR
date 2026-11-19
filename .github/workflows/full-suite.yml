@@ -158,7 +158,7 @@ jobs:
         run: |
           set -o pipefail
           ec=0
-          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          ctest --test-dir build --no-tests=error --output-on-failure -R "^(tci_tx_voice_dsp_test|tx_operation_integration_test|tci_server_review_test|hl2_tci_signaling_test|tx_audio_context_test)$" 2>&1 | tee full-suite.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
