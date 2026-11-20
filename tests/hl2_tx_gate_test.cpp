@@ -1967,6 +1967,15 @@ int main(int argc, char** argv)
               "THE PRIME: the client-leveled deadline is twice its margin's arrival time");
         check(MetisClientTestAccess::clientPrimeTarget() < MetisClientTestAccess::queueMax(),
               "THE PRIME: the client-leveled target fits below the overflow bound");
+        // The late-block warning follows the margin the over was primed with.
+        const auto marginMs = [](std::size_t samples) {
+            return static_cast<qint64>(samples * 1000 / 48000);
+        };
+        check(Hl2TxDsp::primeMarginMsFor(TxAudioSource::ClientLeveled)
+                  == marginMs(MetisClientTestAccess::clientPrimeTarget() - block)
+              && Hl2TxDsp::primeMarginMsFor(TxAudioSource::Microphone) == marginMs(margin)
+              && Hl2TxDsp::primeMarginMsFor(TxAudioSource::EngineGenerated) == marginMs(margin),
+              "THE PRIME: the late-block warning uses the margin of the block's own source");
 
         TxTestAuthority tx;
         ScopedTxFifoLog log;

@@ -118,9 +118,14 @@ struct MemoryRecallDetails {
 //  1. THE BACKEND OBJECT LIVES ON ITS OWNER'S THREAD — RadioModel's (GUI thread
 //     in the app, main thread in aetherd). It is never moved, every virtual is
 //     called there, and verbs need no locks against each other.
-//     Sole exception: the callable directTxSubmitter() returns may be invoked
-//     from the AudioEngine thread. A backend that returns one makes the
-//     submitTxAudio() path it calls safe there; the default returns none.
+//     Sole exception, granted to Hl2Backend alone (maintainer ruling on #7247):
+//     the callable directTxSubmitter() returns may be invoked from the
+//     AudioEngine thread. Its gate is Hl2Backend::m_directTxGate: the callable
+//     holds the gate's mutex from its keyed check to the post of the block,
+//     keying stores the keyed flag under the same mutex, and the destructor
+//     closes the gate first, after which the callable returns false. The
+//     default returns none; another backend adopts this only through review,
+//     and changes this text when it does.
 //  2. EVERY SEAM SIGNAL IS EMITTED FROM THAT THREAD, data plane
 //     (audioFrameReady, sliceAudioFrameReady, spectrumFrameReady, meterUpdate)
 //     and linkStatsUpdated included. A worker hops back first (queued connection

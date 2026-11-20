@@ -2235,13 +2235,11 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedByte
     // extended idle, or the radio stopped sending VITA-49 packets).
     // Restart the sink to re-acquire a fresh handle. (#1411)
     //
-    // While the radio transmits, no RX audio arrives by design, so silence is
-    // not a sign of a dead sink. Restarting then runs stopRxStream() and
-    // startRxStream() on this thread, which also carries the queued TCI/DAX
-    // TX audio (feedDaxTxAudio): on a Hermes-Lite 2 each restart left the
-    // host TX queue starved for up to ~0.8 s, so the carrier dropped out every
-    // 15 s of a TCI over. Treat TX as liveness and start the clock again at
-    // unkey.
+    // Silence while the radio transmits is not a dead sink: no RX audio
+    // arrives by design. A restart here would also stall the TX audio this
+    // thread carries (feedDaxTxAudio), so TX counts as liveness and the clock
+    // starts again at unkey. m_radioTransmitting is the raw interlock, so on a
+    // Multi-Flex station another client's over counts too.
     if (m_radioTransmitting.load(std::memory_order_acquire)) {
         m_lastAudioFeedTime.start();
     } else if (m_lastAudioFeedTime.isValid()

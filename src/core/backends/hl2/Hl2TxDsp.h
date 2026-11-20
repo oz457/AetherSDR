@@ -158,6 +158,17 @@ public:
     static constexpr std::size_t kClientPrimeMarginSamples = 8192;
     static constexpr qint64 kClientPrimeMarginMs =
         static_cast<qint64>(kClientPrimeMarginSamples * 1000 / 48000);
+    // The same for every other source (microphone, engine-generated):
+    // MetisClient::kTxPrimeMarginSamples is this, 42 ms truncated from 42.67.
+    static constexpr std::size_t kPrimeMarginSamples = 2048;
+    static constexpr qint64 kPrimeMarginMs =
+        static_cast<qint64>(kPrimeMarginSamples * 1000 / 48000);
+    // The gap that reaches the air for a block from `source`.
+    [[nodiscard]] static constexpr qint64 primeMarginMsFor(TxAudioSource source) noexcept
+    {
+        return source == TxAudioSource::ClientLeveled ? kClientPrimeMarginMs
+                                                      : kPrimeMarginMs;
+    }
 
     // Blocks the modulator could not place on the wire since configure(): each
     // non-Ok WdspChannel::processIq in the TXA build, always 0 in the phasing

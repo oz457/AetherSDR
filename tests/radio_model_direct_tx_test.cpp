@@ -157,6 +157,22 @@ void testReplacedBackendDropsTheSubmitter()
     check(calls == 0, "the previous backend's submitter is not called");
 }
 
+// The HL2 callable after its backend is destroyed: the destructor's gate close
+// is what keeps it from reaching a freed backend (rule 1's HL2 exception).
+void testHl2SubmitterAfterBackendGone()
+{
+    std::printf("\n  the HL2 submitter after its backend is destroyed\n");
+    TxTestAuthority authority;
+    auto backend = std::make_unique<hl2::Hl2Backend>();
+    const IRadioBackend::DirectTxSubmitter submit =
+        static_cast<IRadioBackend&>(*backend).directTxSubmitter();
+    check(submit(block(), 24000, TxAudioSource::ClientLeveled, authority.context),
+          "true while the backend lives (unkeyed: taken and dropped)");
+    backend.reset();
+    check(!submit(block(), 24000, TxAudioSource::ClientLeveled, authority.context),
+          "false once the backend is gone");
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -170,6 +186,7 @@ int main(int argc, char** argv)
     testTakenAndRefused();
     testGoneBackendReturnsFalse();
     testReplacedBackendDropsTheSubmitter();
+    testHl2SubmitterAfterBackendGone();
 
     std::printf("\n%s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL", g_failures,
                 g_failures == 1 ? "" : "s");

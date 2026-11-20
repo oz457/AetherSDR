@@ -1644,9 +1644,9 @@ MainWindow::MainWindow(QWidget* parent)
     // samples, but carrying immutable producer provenance across this queued
     // hop. Recorder/monitor consumers stay on the unguarded tap.
     //
-    // Direct on the AudioEngine thread when the backend takes it (HL2): through
-    // the GUI thread, every GUI hitch was a gap in the transmitted audio.
-    // Other backends keep the queued hop.
+    // Direct on the AudioEngine thread when the backend takes it (HL2, rule 1's
+    // exception in IRadioBackend.h), so a GUI-thread stall cannot hold up
+    // transmit audio. Other backends keep the queued hop.
     connect(m_audio, &AudioEngine::txTransportPcmReady,
             this, [this](const QByteArray& pcm, TxAudioSource source,
                          const TxCoordinator::Context& context) {

@@ -916,8 +916,8 @@ private:
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples
     TxCoordinator::Context m_txIqContext;
     // Roughly a third of a second at 48 kHz. Past this the operator is hearing
-    // latency, so dropping is better than growing the backlog. Raised from
-    // 12000 to hold the 171 ms client prime with room above it.
+    // latency, so dropping is better than growing the backlog. Holds the
+    // 171 ms client prime with room above it.
     static constexpr std::size_t kTxQueueMax = 16384;
     // THE PRIME (#6052). Delivery is in whole blocks, so an unprimed queue is
     // empty when each block is due and any lateness is keyed zeros mid-over.
@@ -929,7 +929,8 @@ private:
         static_cast<std::size_t>(Hl2TxDsp::Config{}.dspBlockSize)
         * static_cast<std::size_t>(Hl2TxDsp::Config{}.outputSampleRateHz
                                    / Hl2TxDsp::Config{}.inputSampleRateHz);
-    static constexpr std::size_t kTxPrimeMarginSamples = 2048;  // 42.67 ms at 48 kHz
+    static constexpr std::size_t kTxPrimeMarginSamples =
+        Hl2TxDsp::kPrimeMarginSamples;  // 42.67 ms at 48 kHz
     static constexpr std::size_t kTxPrimeTargetSamples =
         kTxPrimeMarginSamples + kTxPrimeBlockSamples;
     // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
@@ -937,12 +938,11 @@ private:
         (2 * kTxPrimeMarginSamples) / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
-    // TCI/DAX audio: 8192 samples (171 ms at 48 kHz). On a Hermes-Lite 2 the
-    // TCI path measured mid-over starvations of 1-49 EP2 packets (up to
-    // 128 ms) with the two-block margin, against a steady client and an
-    // on-time TCI clock, and producer stalls of 100-180 ms. Stated in samples,
-    // not blocks: the stalls are wall-clock time, so the margin must not shrink
-    // when the block does.
+    // TCI/DAX audio: 8192 samples (171 ms at 48 kHz). It crosses the TCI I/O
+    // thread, the audio thread and the TXA exchange, so it arrives with more
+    // jitter than the microphone; the margin absorbs producer gaps up to its
+    // length. Stated in samples, not blocks: the gaps are wall-clock time, so
+    // the margin must not shrink when the block does.
     static constexpr std::size_t kTxPrimeClientMarginSamples =
         Hl2TxDsp::kClientPrimeMarginSamples;
     static constexpr std::size_t kTxPrimeClientTargetSamples =

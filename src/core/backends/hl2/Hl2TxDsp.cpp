@@ -647,14 +647,14 @@ void Hl2TxDsp::processAudioBlock(const std::vector<float>& mono,
         return;
     // Diagnostic: a late block here means the producer (AudioEngine, or the
     // GUI thread on the queued path) stalled, not the wire.
-    // Gaps up to the client prime's margin (kClientPrimeMarginMs) are absorbed
+    // Gaps up to this source's prime margin (primeMarginMsFor) are absorbed
     // and logged at debug; past it the gap reaches the air, so it warns.
     if (m_arrivalTimer.isValid()) {
         const qint64 gapMs = m_arrivalTimer.restart();
         if (gapMs >= 60) {
             ++m_lateBlocks;
             m_worstGapMs = std::max(m_worstGapMs, gapMs);
-            if (gapMs > kClientPrimeMarginMs) {
+            if (gapMs > primeMarginMsFor(source)) {
                 qCWarning(lcTxMod).nospace()
                     << "HL2 tx audio: block arrived " << gapMs
                     << " ms after the previous one, past the prime margin ("
