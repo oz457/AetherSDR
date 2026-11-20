@@ -152,6 +152,24 @@ public:
     // blocks: the prime margin (42.67 ms) covers the wire while the block waits.
     static constexpr std::size_t kExchangeStallSamples = 512;
 
+    // The client-leveled prime margin (MetisClient::kTxPrimeClientMarginSamples
+    // is this), and the producer gap it absorbs at the 48 kHz input: 170 ms,
+    // truncated from 170.67, so a gap of 171 ms or more reaches the air.
+    static constexpr std::size_t kClientPrimeMarginSamples = 8192;
+    static constexpr qint64 kClientPrimeMarginMs =
+        static_cast<qint64>(kClientPrimeMarginSamples * 1000 / 48000);
+    // The same for every other source (microphone, engine-generated):
+    // MetisClient::kTxPrimeMarginSamples is this, 42 ms truncated from 42.67.
+    static constexpr std::size_t kPrimeMarginSamples = 2048;
+    static constexpr qint64 kPrimeMarginMs =
+        static_cast<qint64>(kPrimeMarginSamples * 1000 / 48000);
+    // The gap that reaches the air for a block from `source`.
+    [[nodiscard]] static constexpr qint64 primeMarginMsFor(TxAudioSource source) noexcept
+    {
+        return source == TxAudioSource::ClientLeveled ? kClientPrimeMarginMs
+                                                      : kPrimeMarginMs;
+    }
+
     // Blocks the modulator could not place on the wire since configure(): each
     // non-Ok WdspChannel::processIq in the TXA build, always 0 in the phasing
     // build. Surfaced in the log and health snapshot. Read on the I/O thread,
@@ -238,6 +256,11 @@ private:
     // never levelled as a different source. See processAudioBlock().
     TxAudioSource m_lastSource = TxAudioSource::Microphone;
     bool m_sourceChangeWarned = false;   // one warning per transmission
+    // Diagnostic: time since the previous audio block of this transmission,
+    // and this transmission's late blocks, summarised once in reset().
+    QElapsedTimer m_arrivalTimer;
+    int m_lateBlocks = 0;
+    qint64 m_worstGapMs = 0;
     int m_upsample = 2;
     Hl2TxAlc m_alc;              // level chain; its gain carries across blocks
     unsigned long long m_modulatorGeneration = 0;

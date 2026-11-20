@@ -2245,7 +2245,15 @@ void AudioEngine::drainRxAudio(qsizetype freeBytes, qsizetype playbackQueuedByte
     // the audio backend may have silently stopped (CoreAudio after
     // extended idle, or the radio stopped sending VITA-49 packets).
     // Restart the sink to re-acquire a fresh handle. (#1411)
-    if (m_lastAudioFeedTime.isValid()
+    //
+    // Silence while the radio transmits is not a dead sink: no RX audio
+    // arrives by design. A restart here would also stall the TX audio this
+    // thread carries (feedDaxTxAudio), so TX counts as liveness and the clock
+    // starts again at unkey. m_radioTransmitting is the raw interlock, so on a
+    // Multi-Flex station another client's over counts too.
+    if (m_radioTransmitting.load(std::memory_order_acquire)) {
+        m_lastAudioFeedTime.start();
+    } else if (m_lastAudioFeedTime.isValid()
         && m_lastAudioFeedTime.elapsed() > kAudioLivenessTimeoutMs
         && m_rxBuffer.isEmpty()
         && m_rxPackets.empty()

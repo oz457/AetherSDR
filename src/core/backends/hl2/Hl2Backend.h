@@ -30,6 +30,8 @@
 #include "core/backends/hl2/MetisProtocol.h"   // Hl2Telemetry
 
 #include <atomic>
+#include <functional>
+#include <mutex>
 #include <cstdint>
 #include <deque>
 #include <limits>
@@ -184,6 +186,11 @@ public:
     void submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                        TxAudioSource source,
                        const TxCoordinator::Context& context) override;
+    // Transmit audio straight from the AudioEngine thread, without the hop
+    // through the GUI thread: a GUI hitch of 100+ ms otherwise starves the
+    // transmit queue mid-over. The returned callable is safe from any thread
+    // and outlives the backend; once the backend is gone it returns false.
+    DirectTxSubmitter directTxSubmitter() override;
     void setTxPower(int percent) override;
     void setTunePower(int percent) override;
     void setTxFilter(int lowHz, int highHz) override;
@@ -493,7 +500,7 @@ private:
 
     void emitSliceState(int ddc, bool forceAntennas = false);
     void emitPanState(int ddc);     // panCenterBandwidthChanged from its NCO + rate
-    void emitAllSliceState();
+    void emitAllSliceState(bool announceBlankers = false);
     void emitAllPanState();
     void pushInitialState();
     // Put every receiver's AGC pair where this session should come up: remembered
@@ -547,6 +554,8 @@ private:
     QString m_psUnavailableReason;
     int m_psFeedbackRateHz = 0;
     Hl2PureSignalStatus m_psStatus;
+    quint64 m_psGeneration = 0;
+    bool m_psAdcOverload = false;
     // The operator's PureSignal preferences. GUI thread; the backend owns them
     // and persists them per radio as the "PureSignal" radio_settings document
     // (one coupler, one feedback attenuation), loaded on every connect.
@@ -707,7 +716,9 @@ private:
         AetherSDR::NoiseBlankerKind nbKind = AetherSDR::NoiseBlankerKind::Off;
         int  nbLevel = 50;
         AetherSDR::NoiseBlankerFill nbFill = AetherSDR::kDefaultNoiseBlankerFill;
-        // A restored blanker still to be published once (emitSliceState).
+        // A blanker whose kind changed, that was restored, whose receiver just
+        // opened, or that the connect announcement re-sends, still to be
+        // published once (emitSliceState).
         bool nbEchoPending = false;
 
         // APF request and AGC-off level, held like the blanker: nothing echoes
@@ -828,6 +839,9 @@ private:
     // open: receiver A's extras, and the whole entry for any a numRx param opened.
     void seedOpenReceiversFromMemory();
     void seedReceiverExtras(Receiver& r, const Receiver& memory) const;
+    // The pan centre r comes up on: `ncoHz` while r listens inside its usable
+    // window at the current rate, else r's tuned frequency.
+    [[nodiscard]] double panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const;
     [[nodiscard]] static QJsonObject receiverMemoryJson(const Receiver& r);
     // Nullopt for an entry with no usable frequency or mode; other bad fields drop alone.
     [[nodiscard]] std::optional<Receiver> receiverFromMemory(const QJsonObject& o) const;
@@ -960,7 +974,8 @@ private:
     static QString sliceMeterName(int uiNumber);
 
     // Meter index for a receiver's "SLC"/"LEVEL". Receiver 0 keeps index 1 (as
-    // defineMeters() declares); the rest use a band clear of the fixed 1..9.
+    // defineMeters() declares); the rest use a band starting at
+    // kSliceLevelMeterBase, clear of the fixed catalogue below it.
     static int sliceLevelMeterIndex(int uiNumber);
 
     // Mixing scratch: per-receiver samples awaiting peers, and a reused summing
@@ -1173,6 +1188,14 @@ private:
     // Below this many observations a window has no rate, only a numerator.
     static constexpr int kAdcMinWindowSamples = 4;
     bool m_keyed = false;
+    // m_keyed for the direct transmit-audio path, which runs on the
+    // AudioEngine thread. Written wherever m_keyed is.
+    std::atomic<bool> m_keyedAudio{false};
+    struct DirectTxGate {
+        std::mutex mutex;
+        Hl2Backend* backend = nullptr;   // nulled first thing in the destructor
+    };
+    std::shared_ptr<DirectTxGate> m_directTxGate = std::make_shared<DirectTxGate>();
     // The radio reports its own PTT/key (EP6 ptt_resp). Never an input to keying.
     bool m_radioPtt = false;
     // What transmitChanged last carried as mox: m_keyed || m_radioPtt.
@@ -1282,11 +1305,11 @@ private:
     // True once this transmission carried client-leveled (TCI/DAX) audio. Gates the
     // unkey mic-gain diagnostic off and is reported in healthSnapshot(). Set in
     // submitTxAudio(), cleared on each key edge in setKeying().
-    bool m_txAudioClientLeveled = false;
+    std::atomic<bool> m_txAudioClientLeveled{false};
     // True once this transmission carried EngineGenerated audio (the WSPR pump).
     // Gates the unkey mic-gain diagnostic off: no mic slider is in that path. The
     // AX.25 modem is tagged Microphone, since the slider is its only control.
-    bool m_txAudioEngineGenerated = false;
+    std::atomic<bool> m_txAudioEngineGenerated{false};
 
     // The passband to push at the modulator for `mode`: the operator's if they
     // have chosen one, otherwise that mode's default.
@@ -1299,8 +1322,9 @@ private:
 
     // Meter ballistics: the S-meter's rate gate and EMA are SMeterSmoother's
     // (WdspSMeter.h), shared with AnanBackend (100 ms tick, attack 0.5, decay 0.15),
-    // fed ~47 readings/s at any sample rate. Indices 1..9 are defineMeters()' fixed
-    // catalogue; receivers above the first take kSliceLevelMeterBase + uiNumber.
+    // fed ~47 readings/s at any sample rate. Indices below kSliceLevelMeterBase are
+    // defineMeters()' fixed catalogue; receivers above the first take
+    // kSliceLevelMeterBase + uiNumber.
     static constexpr int kSliceLevelMeterBase = 100;
     // S-meter state is per receiver (Receiver::sMeter). PA temperature rides the
     // 10 Hz telemetry and needs only a symmetric EMA against ADC low-bit flicker.

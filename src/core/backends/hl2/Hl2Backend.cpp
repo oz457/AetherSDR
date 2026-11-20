@@ -371,6 +371,9 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
     m_pureSignal->moveToThread(m_ioThread);
     connect(m_pureSignal, &Hl2PureSignal::statusChanged, this,
             [this](const Hl2PureSignalStatus& s) {
+        if (s.generation != m_psGeneration) {
+            return;
+        }
         m_psStatus = s;
         // Worker updates queued before linkDown must not publish after the
         // seam's final disconnected notification (IRadioBackend rule 6).
@@ -497,7 +500,7 @@ Hl2Backend::Hl2Backend(QObject* parent) : IRadioBackend(parent)
         // emitPanState() reads nothing pushInitialState() changes.
         emitAllPanState();
         pushInitialState();
-        emitAllSliceState();
+        emitAllSliceState(/*announceBlankers=*/true);
         defineMeters();
         // Once per connect, after receiver A is published: the remembered
         // notches and receivers B.. come back through the operator's own paths.
@@ -855,16 +858,20 @@ void Hl2Backend::updateTelemetryPollState()
     const Hl2LinkState state = telemetryLinkState();
     m_telemetryService->setLinkState(state);
 
-    // Publish RAD:PATEMP from the poller when in-band telemetry is not live,
-    // so the needle does not freeze. Raw, not fed into m_paTempC, whose filter
-    // belongs to the in-band session. With no reading at all the needle still
-    // holds (the meter seam has no "unknown"); the health row shows the gap.
+    // Publish RAD:PATEMP and RAD:PACURRENT from the poller when in-band
+    // telemetry is not live, so the needles do not freeze. Raw, not fed into
+    // m_paTempC, whose filter belongs to the in-band session. With no reading at
+    // all a needle still holds (the meter seam has no "unknown"); the health row
+    // shows the gap.
     if (state == Hl2LinkState::Streaming)
-        return;   // in-band owns the meter whenever it is live
+        return;   // in-band owns the meters whenever it is live
     const std::optional<DiscoveryReply> reply = m_telemetryService->lastReply();
     if (reply && reply->temperatureRaw)
         emit meterUpdate(QStringLiteral("RAD:PATEMP"),
                          hl2TemperatureCelsius(*reply->temperatureRaw));
+    if (reply && reply->biasCurrentRaw)
+        emit meterUpdate(QStringLiteral("RAD:PACURRENT"),
+                         hl2PaCurrentAmps(*reply->biasCurrentRaw));
 }
 
 void Hl2Backend::setTelemetryPollTarget(const QHostAddress& addr, bool heldByOther)
@@ -1165,6 +1172,8 @@ bool Hl2Backend::addReceiver(const Receiver& requested)
     Receiver seed = requested;
     seed.publishedTxAntenna.clear();
     seed.antennasPublished = false;
+    // A new slice's blanker is announced once, like its antennas.
+    seed.nbEchoPending = true;
     // AGC is flat: every receiver runs the first one's (seedReceiverAgc).
     if (!m_rx.empty()) {
         const Receiver& first = m_rx.front();
@@ -1918,19 +1927,20 @@ void Hl2Backend::applyPureSignalWire(bool on)
     if (on == m_psEnabled)
         return;
     m_psEnabled = on;
-    // Order on the I/O thread: claim the DDCs before the controller starts,
-    // and stop the controller before the DDCs go back.
-    if (on) {
-        QMetaObject::invokeMethod(m_metis, "setPureSignal", Qt::QueuedConnection,
-                                  Q_ARG(bool, true));
-        QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::QueuedConnection,
-                                  Q_ARG(bool, true));
-    } else {
-        QMetaObject::invokeMethod(m_pureSignal, "setEnabled", Qt::QueuedConnection,
-                                  Q_ARG(bool, false));
-        QMetaObject::invokeMethod(m_metis, "setPureSignal", Qt::QueuedConnection,
-                                  Q_ARG(bool, false));
-    }
+    const quint64 generation = ++m_psGeneration;
+    m_psAdcOverload = false;
+    m_psStatus.feedbackLimit = 0;
+    // Claim DDCs before the controller starts, and stop it before releasing them.
+    QMetaObject::invokeMethod(m_metis,
+        [metis = m_metis, controller = m_pureSignal, on, generation] {
+            if (on) {
+                metis->setPureSignal(true, generation);
+                controller->setEnabled(true, generation);
+            } else {
+                controller->setEnabled(false, generation);
+                metis->setPureSignal(false, generation);
+            }
+        }, Qt::QueuedConnection);
     qCInfo(lcHl2) << "HL2: PureSignal" << (on ? "on — DDC 2/3 claimed, receiver ceiling 2"
                                               : "off");
     announceReceiverCeilingRevision();
@@ -1996,8 +2006,15 @@ QVariantMap Hl2Backend::pureSignalFields() const
     s.autoAttenuate = m_psAutoAttenuate;
     // Auto-attenuate moves the attenuation on the I/O thread; only a manual
     // setting is this thread's to report.
-    if (!m_psAutoAttenuate)
+    if (!m_psAutoAttenuate && s.attenuationDb != m_psAttenuationDb) {
         s.attenuationDb = m_psAttenuationDb;
+        s.feedbackLimit = 0;
+    }
+    if (!m_psEnabled) {
+        s.feedbackLimit = 0;
+    } else if (m_psAdcOverload) {
+        s.feedbackLimit = 2;
+    }
     return pureSignalStatusFields(s);
 }
 
@@ -2244,6 +2261,12 @@ void Hl2Backend::publishIoDspList(std::vector<Hl2RxDsp*> next)
 
 Hl2Backend::~Hl2Backend()
 {
+    // Close the direct transmit-audio path before anything it uses goes. The
+    // lock waits for a submit in progress on the AudioEngine thread.
+    {
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_directTxGate->backend = nullptr;
+    }
     // Join the build thread before the I/O thread it posts to, so finished
     // channels are installed or destroyed by their owning thread. Blocks for
     // an in-flight OpenChannel (WDSP opens cannot be cancelled).
@@ -2446,6 +2469,29 @@ RadioCapabilities Hl2Backend::capabilities() const
         {QStringLiteral("CW"), -6000, -10, 10, 6000, 20, 12000},
         {QStringLiteral("CWL"), -6000, -10, 10, 6000, 20, 12000}}};
     c.receiveAudioControl = ReceiveAudioControl{SliceFrequencyControl::Authority::Engine};
+    // The host DSP this backend runs and echoes in emitSliceState(): AGC, the
+    // impulse blankers and RIT (a DDC retune, clamped by clampRitXit()) in every
+    // mode setSliceMode() accepts, and the APF only where Hl2RxDsp puts it in
+    // circuit. No NR, ANF or manual notch runs here, so none is declared.
+    {
+        using Feature = ReceiveDspControl::Feature;
+        ReceiveDspControl dsp;
+        for (const QString& mode : hl2::knownModeStrings()) {
+            const QString canonical = canonicalOfferedMode(mode);
+            if (!dsp.modes.contains(canonical)) {
+                dsp.modes.append(canonical);
+            }
+        }
+        dsp.features = {Feature::Agc, Feature::Nb, Feature::Apf, Feature::Rit};
+        dsp.featureModes.insert(Feature::Apf, {QStringLiteral("CW"), QStringLiteral("CWL")});
+        dsp.authority = SliceFrequencyControl::Authority::Engine;
+        dsp.maximumRitOffsetHz = kRitXitMaxHz;
+        c.receiveDspControl = dsp;
+    }
+    // setPanRfGain() drives the AD9866 LNA, and panRfGainChanged reports the
+    // gain it applied (the operator's, less any automatic offset).
+    c.receivePanRfGainControl = ReceivePanRfGainControl{SliceFrequencyControl::Authority::Engine,
+                                                        kLnaGainMinDb, kLnaGainMaxDb, kLnaGainStepDb};
     // The BFO pitch is host DSP: setCwPitch adopts it and reports it back as
     // TransmitDelta::cwPitch. Same range and step as cwPitchMinHz..cwPitchMaxHz.
     c.receiveCwPitchControl = ReceiveCwPitchControl{SliceFrequencyControl::Authority::Engine,
@@ -2624,6 +2670,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // deliberately NOT gated — see the note in RadioCapabilities.h.
     c.hasRadioSideCwKeyer = false;
     c.cwTextControl = std::nullopt;
+    // requestCwControl(Kind::Carrier) shapes host-timed elements into IQ.
+    c.hostCwKeyingControl = RadioCapabilities::HostCwKeyingControl{};
     c.hasVoiceKeyer = false;
     c.hasFullDuplex = false;
     c.hasWaveforms = false;             // no installable plugin surface
@@ -2666,6 +2714,8 @@ RadioCapabilities Hl2Backend::capabilities() const
     // readout goes away — the temperature above it keeps working.
     c.hasSupplyVoltageTelemetry = false;
     c.hasPaTemperatureTelemetry = true;
+    // hl2PaCurrentAmps() uses schematic values; not declared calibrated until
+    // a keyed ammeter run confirms it. RAD:PACURRENT is published either way.
     c.hasPaCurrentTelemetry = false;
     // PROC runs in this host's ClientComp (hostModulates), not in the radio.
     c.speechProcessorControl = std::nullopt;
@@ -3056,9 +3106,15 @@ void Hl2Backend::startConnect(const RadioConnectRequest& request)
     // back, with mode, passband and TX NCO, to the receiver that held it.
     m_txDdc = 0;
     buildReceivers(actualNumRx);
+    // A same-radio reconnect keeps each receiver's carried pan centre where the
+    // fresh-start rule would keep a remembered one; seeding sets it otherwise.
+    const bool seedFromMemory =
+        request.serial != m_agcSeededSerial || !m_rxCarriedState;
     for (Receiver& r : m_rx) {
+        const double carriedNcoHz = r.ncoHz;
         r.sliceFreqHz = startFreqHz;
-        r.ncoHz = startFreqHz;
+        r.ncoHz = seedFromMemory ? startFreqHz
+                                 : panCentreKeptOrRecentred(r, carriedNcoHz);
     }
 
     // Seed the remembered AGC (#4909); the only place receivers are seeded
@@ -3067,13 +3123,13 @@ void Hl2Backend::startConnect(const RadioConnectRequest& request)
     // radio (keyed on serial), or when receivers have no carried state (after
     // tearDownReceivers()). Not on a same-radio reconnect whose receivers kept
     // their live per-receiver AGC.
-    if (request.serial != m_agcSeededSerial || !m_rxCarriedState) {
+    if (seedFromMemory) {
         m_agcSeededSerial = request.serial;
         seedReceiverAgc();
         seedOpenReceiversFromMemory();
-        if (!m_rx.empty()) {
-            mp.rxFrequencyHz = ncoCommandHz(m_rx.front().ncoHz);
-        }
+    }
+    if (!m_rx.empty()) {
+        mp.rxFrequencyHz = ncoCommandHz(m_rx.front().ncoHz);
     }
 
     Hl2RxDsp::Config dc;
@@ -3452,6 +3508,12 @@ void Hl2Backend::finishDspSetup(const DspSetupResult& result)
         emit connectionError(QStringLiteral("HL2: could not open the UDP socket"));
         emit dspSetupFinished();
         return;
+    }
+    // start() puts every DDC on receiver A's NCO; the others carry their own.
+    for (std::size_t i = 1; i < m_rx.size(); ++i) {
+        QMetaObject::invokeMethod(m_metis, "setRxFrequencyHz", Qt::QueuedConnection,
+            Q_ARG(int, static_cast<int>(i)),
+            Q_ARG(std::uint32_t, ncoCommandHz(m_rx[i].ncoHz)));
     }
 
     // Assert a known TX drive rather than inheriting whatever the board held.
@@ -3853,10 +3915,17 @@ void Hl2Backend::setSliceNoiseBlanker(int sliceId, AetherSDR::NoiseBlankerKind k
     // bands can legitimately disagree. The slice model already holds it
     // per-slice, so honouring that is also what stops the second receiver's
     // toggle from moving the first one's.
+    const bool kindChanged = r->nbKind != kind;
     r->nbKind = kind;
     r->nbLevel = qBound(0, level, 100);
     r->nbFill = fill;
     pushNoiseBlanker(*r);
+    // On/off and kind only: the receive observation reads d.nb, and a level or
+    // fill echo would make SliceModel re-emit all three NB signals per tick.
+    if (kindChanged) {
+        r->nbEchoPending = true;
+        emitSliceState(ddc);
+    }
     notifyOperatingStateChanged();
 }
 
@@ -5180,6 +5249,15 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
         m_keyedSwrGateClears = 0;
     }
     m_keyed = key;
+    if (!key) {
+        // Under the direct-submit gate: the AudioEngine thread holds it from
+        // its m_keyedAudio check to the post of the block, so a block is either
+        // posted before the unkey's reset and flush below, or refused. That is
+        // the ordering the GUI thread gave when it was the only submitter.
+        // Key-down stores true further on, after the setMox post.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(false);
+    }
     // PureSignal collects only while keyed (calcc's MOX). Queued to the I/O
     // thread behind the MOX write, so feedback after the edge is the keyed one.
     if (keyChanged && m_pureSignal) {
@@ -5262,6 +5340,13 @@ void Hl2Backend::applyKeying(bool key, const TxCoordinator::Operation& operation
                 dsp->reset();
             }
         }, Qt::QueuedConnection);
+    }
+    if (key) {
+        // Only now, after the setMox post: the I/O thread runs posts in order,
+        // so the first direct block of a new over lands after that over's
+        // dsp->reset() rather than being wiped by it.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(true);
     }
     // The receive filter and an owed RF drive wait out the radio's transmit
     // tail (see kTxTailHoldMs), armed only after the MOX-off is queued.
@@ -5914,7 +5999,7 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // fill the transmit queue with audio that goes out the instant MOX asserts —
     // the operator would hear the last second of the shack on their first
     // syllable.
-    if (!m_txDsp || !m_keyed || int16Stereo.isEmpty())
+    if (!m_txDsp || !m_keyedAudio.load() || int16Stereo.isEmpty())
         return;
     // Sticky per transmission until #5647 gives it a job in TxAudioSource
     // (see Hl2Backend.h). Assumes sources never interleave within one
@@ -5924,19 +6009,22 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
     // is active). Hl2TxDsp::processAudioBlock also drops m_inBuffer residue on
     // a mid-transmission source change, with a warning. Anyone changing the
     // mic-capture gate or adding an engine feed must re-check these fences.
-    m_txAudioClientLeveled =
-        m_txAudioClientLeveled || (source == TxAudioSource::ClientLeveled);
+    if (source == TxAudioSource::ClientLeveled)
+        m_txAudioClientLeveled.store(true);
+    // Before the block is queued to the modulator, so the prime sees the
+    // larger TCI/DAX margin by the time this audio reaches the wire.
+    if (m_metis)
+        m_metis->setTxClientLeveledMargin(source == TxAudioSource::ClientLeveled);
     // The unkey diagnostic must not tell a WSPR beacon to raise its mic gain.
     // Engine-generated audio has no mic slider in its path at all now, so
     // "raise mic gain" would point at a control that cannot move it.
-    m_txAudioEngineGenerated =
-        m_txAudioEngineGenerated || (source == TxAudioSource::EngineGenerated);
+    if (source == TxAudioSource::EngineGenerated)
+        m_txAudioEngineGenerated.store(true);
     if (sampleRateHz != 24000) {
         // Stated rather than silently resampled: the modulator's upsampler
         // assumes this rate, and a mismatch transmits at the wrong pitch.
-        static bool warned = false;
-        if (!warned) {
-            warned = true;
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
             qWarning() << "Hl2Backend: TX audio arrived at" << sampleRateHz
                        << "Hz, expected 24000 — not transmitting";
         }
@@ -5957,6 +6045,25 @@ void Hl2Backend::submitTxAudio(const QByteArray& int16Stereo, int sampleRateHz,
                               [dsp = m_txDsp, mono = std::move(mono), source, context] {
         dsp->processAudioBlock(mono, source, context);
     }, Qt::QueuedConnection);
+}
+
+Hl2Backend::DirectTxSubmitter Hl2Backend::directTxSubmitter()
+{
+    {
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_directTxGate->backend = this;
+    }
+    return [gate = m_directTxGate](const QByteArray& pcm, int rateHz, TxAudioSource source,
+                                   const TxCoordinator::Context& context) {
+        const std::lock_guard<std::mutex> lock(gate->mutex);
+        if (!gate->backend)
+            return false;
+        // Everything submitTxAudio() touches is safe off the GUI thread: the
+        // keyed state and the per-transmission flags are atomics, the margin
+        // setter is atomic, and the block is queued to the I/O thread.
+        gate->backend->submitTxAudio(pcm, rateHz, source, context);
+        return true;
+    };
 }
 
 void Hl2Backend::setTxTestTone(double offsetHz, double amplitude, const TxCoordinator::Operation& operation)
@@ -7445,6 +7552,8 @@ IRadioBackend::HealthSnapshot Hl2Backend::healthSnapshot(std::int64_t nowNs) con
         (inBandLive && m_havePaTemp) ? QVariant(m_paTempC) : QVariant());
     put("temperatureRaw", QStringLiteral("Temperature (raw counts)"),
         opt(t.temperatureRaw));
+    put("paCurrentA", QStringLiteral("PA current (A)"),
+        t.biasCurrentRaw ? QVariant(hl2PaCurrentAmps(*t.biasCurrentRaw)) : QVariant());
     put("biasCurrentRaw", QStringLiteral("PA bias current (raw counts)"),
         opt(t.biasCurrentRaw));
 
@@ -8263,13 +8372,14 @@ void Hl2Backend::seedReceiverExtras(Receiver& r, const Receiver& memory) const
     r.audioGain = memory.audioGain;
     r.audioPanPercent = memory.audioPanPercent;
     r.nbEchoPending = true;
-    // The pan centre only where the receiver still listens inside it.
+    r.ncoHz = panCentreKeptOrRecentred(r, memory.ncoHz);
+}
+
+double Hl2Backend::panCentreKeptOrRecentred(const Receiver& r, double ncoHz) const
+{
     const double usableHz = m_sampleRateHz / 2.0 * kUsablePassbandFraction;
-    if (std::abs(rxTunedHz(r) - memory.ncoHz) <= usableHz) {
-        r.ncoHz = memory.ncoHz;
-    } else {
-        r.ncoHz = rxTunedHz(r);
-    }
+    const double tunedHz = rxTunedHz(r);
+    return std::abs(tunedHz - ncoHz) <= usableHz ? ncoHz : tunedHz;
 }
 
 void Hl2Backend::replayRestoredSession()
@@ -9148,12 +9258,18 @@ void Hl2Backend::pushInitialState()
     // keyed because the previous session ended mid-transmission. The radio's own
     // PTT is re-read from the first EP6 frame after this.
     m_keyed = false;
+    {
+        // Same ordering as applyKeying(): see there.
+        const std::lock_guard<std::mutex> lock(m_directTxGate->mutex);
+        m_keyedAudio.store(false);
+    }
     if (m_pureSignal) {
         QMetaObject::invokeMethod(m_pureSignal, "setKeyed", Qt::QueuedConnection,
                                   Q_ARG(bool, false));
     }
     m_radioPtt = false;
     m_swrGate.reset();
+    m_psAdcOverload = false;
     publishTransmitState();
     m_tuning = false;
     m_tuneOperation = {};
@@ -9248,6 +9364,9 @@ void Hl2Backend::defineMeters()
         -140.0, 0.0,   QStringLiteral("Transmit audio after the ALC, into the modulator"));
     def(11, QStringLiteral("TX"), QStringLiteral("SC_FILT_2"), QStringLiteral("dBFS"),
         -140.0, 0.0,   QStringLiteral("Modulated transmit IQ, the modulator's output"));
+    // Full scale is the converter's top count (about 2.07 A); hl2PaCurrentAmps().
+    def(12, QStringLiteral("RAD"), QStringLiteral("PACURRENT"), QStringLiteral("Amps"),
+        0.0, hl2PaCurrentAmps(4095), QStringLiteral("PA drain current"));
 }
 
 void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
@@ -9340,6 +9459,9 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
         m_havePaTemp = true;
         emit meterUpdate(QStringLiteral("RAD:PATEMP"), m_paTempC);
     }
+    if (t.biasCurrentRaw)
+        emit meterUpdate(QStringLiteral("RAD:PACURRENT"),
+                         hl2PaCurrentAmps(*t.biasCurrentRaw));
 
     m_telemetry = t;
     // THE RATE, ACCUMULATED RATHER THAN SAMPLED. The edge counter below sees
@@ -9408,6 +9530,24 @@ void Hl2Backend::publishTelemetry(const Hl2Telemetry& t)
             m_adcOverloadClock.start();
         }
         m_adcOverloadAssertions = 0;
+    }
+
+    // Use the keying and enable cycle at acquisition. Delivery may be after unkey.
+    const bool feedbackWindow = t.psAdcGeneration != 0 && t.psAdcGeneration == m_psGeneration;
+    const bool psOverload = AetherSDR::hl2::Hl2PsOverload::next(
+        m_psAdcOverload, m_psEnabled, feedbackWindow, t.adcOverloadSamples > 0);
+    if (psOverload != m_psAdcOverload) {
+        m_psAdcOverload = psOverload;
+        if (psOverload) {
+            qWarning().noquote()
+                << QStringLiteral("HL2 PureSignal: ADC overload while transmitting (%1 of %2 "
+                                  "responses): feedback overdrives the receive input. "
+                                  "Add an attenuator in the feedback path.")
+                       .arg(t.adcOverloadSamples)
+                       .arg(t.adcSamples);
+        }
+        emit extensionStatus(QStringLiteral("hl2"), QStringLiteral("puresignal"),
+                             pureSignalFields());
     }
 }
 
@@ -9674,9 +9814,12 @@ void Hl2Backend::emitSliceState(int ddc, bool forceAntennas)
     d.audioGain = qRound(r->audioGain * 100.0f);
     d.audioMute = r->audioMuted;
     d.audioPan = r->audioPanPercent;
-    // A restored blanker, once, so the NB control shows it. Not on every echo:
-    // SliceModel re-emits all three NB signals for each one it receives.
+    // The blanker when its kind changed, it was restored, its receiver just
+    // opened or the connect announcement re-sends it, not on every echo:
+    // SliceModel re-emits all three NB signals for each one it receives. d.nb is
+    // what the slice's receive observation reads.
     if (r->nbEchoPending) {
+        d.nb = r->nbKind != AetherSDR::NoiseBlankerKind::Off;
         d.nbKind = r->nbKind;
         d.nbLevel = r->nbLevel;
         d.nbFill = r->nbFill;
@@ -9737,8 +9880,17 @@ void Hl2Backend::emitPanState(int ddc)
                                    static_cast<double>(m_sampleRateHz) / 1.0e6);
 }
 
-void Hl2Backend::emitAllSliceState()
+void Hl2Backend::emitAllSliceState(bool announceBlankers)
 {
+    // Only the connect announcement re-sends every blanker: RadioModel has just
+    // wiped the slices. The other re-announces (TX slice or antenna moved, a
+    // receiver closed, a DSP build failed) keep every surviving slice, so a
+    // re-send would only make SliceModel re-emit all three NB signals.
+    if (announceBlankers) {
+        for (Receiver& r : m_rx) {
+            r.nbEchoPending = true;
+        }
+    }
     for (const auto& ids : m_ids.all())
         emitSliceState(ids.ddcIndex, true);
 }

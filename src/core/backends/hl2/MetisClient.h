@@ -189,6 +189,16 @@ public:
                                const QHostAddress& broadcast = QHostAddress::Broadcast,
                                quint16 port = kMetisPort);
 
+    // A peer on this host (hpsdrsim at 127.0.0.1) replies from the address it was
+    // sent from: from a LAN-bound socket, the LAN address, which onReadyRead()'s
+    // sender filter (m_host:m_port only) drops. So a loopback target is probed
+    // from loopback interfaces only, and an IPv4 loopback target's session binds
+    // 127.0.0.1 (::1 keeps the wildcard bind); every other target is unchanged.
+    [[nodiscard]] static bool discoveryWalksInterface(bool upAndRunning, bool isLoopbackInterface,
+                                                      const QHostAddress& target);
+    [[nodiscard]] static QHostAddress sessionBindAddress(const QHostAddress& host,
+                                                         const QHostAddress& requested);
+
     // start()/stop() and every live-control setter below MUST execute on this
     // object's own thread: start() constructs the QUdpSocket, and a socket takes
     // the affinity of the thread that creates it. Hl2Backend owns an I/O thread
@@ -233,7 +243,7 @@ public:
     // edge queues the bank at once so the feedback gain switches with T/R. The
     // caller owns availability: a board with fewer than four DDCs streams
     // nothing on the missing ones, so Hl2Backend never asks for it there.
-    Q_INVOKABLE void setPureSignal(bool enabled);
+    void setPureSignal(bool enabled, quint64 generation);
     // AD9866 gain during a PureSignal transmission, dB (-12..+48). The
     // controller works in attenuation, att = 19 - dB (Hl2PsGain).
     Q_INVOKABLE void setPureSignalTxGainDb(int db);
@@ -438,6 +448,14 @@ public:
     // belongs to the transmission that just ended.
     Q_INVOKABLE void flushTxIq();
     [[nodiscard]] std::size_t txQueueDepth() const noexcept { return m_txIq.size(); }
+    // Client-leveled (TCI/DAX) transmit audio crosses more threads than the
+    // microphone before it reaches this queue, and arrives with more jitter.
+    // While set, the prime holds kTxPrimeClientMarginSamples instead of
+    // kTxPrimeMarginSamples. Any thread; read on the I/O thread.
+    void setTxClientLeveledMargin(bool on) noexcept
+    {
+        m_txClientLeveledMargin.store(on, std::memory_order_relaxed);
+    }
 
     // TX IQ FIFO fault accounting. The FIFO is bounded at kTxQueueMax: overflow drops
     // the oldest samples, underflow zero-fills (ep2WriteTxIq). These count, they do
@@ -452,7 +470,7 @@ public:
     [[nodiscard]] std::uint64_t txUnderflowSamples() const noexcept { return m_txUnderflowSamples; }
     [[nodiscard]] std::uint64_t txOverflowSamples() const noexcept { return m_txOverflowSamples; }
     // Backlog dropped once when a mid-over starvation ends with the queue above the
-    // prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
+    // over's prime target plus kTxTrimMarginSamples: latency returns to the primed depth.
     [[nodiscard]] std::uint64_t txTrimSamples() const noexcept { return m_txTrimSamples; }
     [[nodiscard]] std::uint64_t txTrimEvents() const noexcept { return m_txTrimEvents; }
     // Empty-queue keyed silence at the head of the most recent over that
@@ -897,9 +915,10 @@ private:
     bool m_txAllowed = false;   // gate; see enableTransmit()
     std::deque<std::complex<float>> m_txIq;   // pending transmit samples
     TxCoordinator::Context m_txIqContext;
-    // Roughly a quarter second at 48 kHz. Past this the operator is hearing
-    // latency, so dropping is better than growing the backlog.
-    static constexpr std::size_t kTxQueueMax = 12000;
+    // Roughly a third of a second at 48 kHz. Past this the operator is hearing
+    // latency, so dropping is better than growing the backlog. Holds the
+    // 171 ms client prime with room above it.
+    static constexpr std::size_t kTxQueueMax = 16384;
     // THE PRIME (#6052). Delivery is in whole blocks, so an unprimed queue is
     // empty when each block is due and any lateness is keyed zeros mid-over.
     // Armed on the keyed edge and on every abandon; the keyed queued-IQ arm then
@@ -910,7 +929,8 @@ private:
         static_cast<std::size_t>(Hl2TxDsp::Config{}.dspBlockSize)
         * static_cast<std::size_t>(Hl2TxDsp::Config{}.outputSampleRateHz
                                    / Hl2TxDsp::Config{}.inputSampleRateHz);
-    static constexpr std::size_t kTxPrimeMarginSamples = 2048;  // 42.67 ms at 48 kHz
+    static constexpr std::size_t kTxPrimeMarginSamples =
+        Hl2TxDsp::kPrimeMarginSamples;  // 42.67 ms at 48 kHz
     static constexpr std::size_t kTxPrimeTargetSamples =
         kTxPrimeMarginSamples + kTxPrimeBlockSamples;
     // Deadline in packets: twice the margin's arrival time. A stopped producer is let go.
@@ -918,14 +938,33 @@ private:
         (2 * kTxPrimeMarginSamples) / static_cast<std::size_t>(kTxSamplesPerPacket);
     static_assert(kTxPrimeTargetSamples < kTxQueueMax,
                   "the prime target must fit below the overflow bound");
+    // TCI/DAX audio: 8192 samples (171 ms at 48 kHz). It crosses the TCI I/O
+    // thread, the audio thread and the TXA exchange, so it arrives with more
+    // jitter than the microphone; the margin absorbs producer gaps up to its
+    // length. Stated in samples, not blocks: the gaps are wall-clock time, so
+    // the margin must not shrink when the block does.
+    static constexpr std::size_t kTxPrimeClientMarginSamples =
+        Hl2TxDsp::kClientPrimeMarginSamples;
+    static constexpr std::size_t kTxPrimeClientTargetSamples =
+        kTxPrimeClientMarginSamples + kTxPrimeBlockSamples;
+    static constexpr std::uint64_t kTxPrimeClientMaxHoldPackets =
+        (2 * kTxPrimeClientMarginSamples)
+            / static_cast<std::size_t>(kTxSamplesPerPacket);
+    static_assert(kTxPrimeClientTargetSamples < kTxQueueMax,
+                  "the client prime target must fit below the overflow bound");
+    std::atomic<bool> m_txClientLeveledMargin{false};
     // Depth above the target that is still steady state: a producer delivers up
     // to 2048 samples (42.67 ms) at once, whatever the DSP block: a TCI client's
     // 2048-sample mono TX_AUDIO frame. More than that after a mid-over starvation
-    // is a backlog, trimmed once to the target (trimTxIqAfterUnderflow()).
+    // is a backlog, trimmed once to the target this over was primed to
+    // (m_txIqOverTarget, trimTxIqAfterUnderflow()).
     static constexpr std::size_t kTxTrimMarginSamples = 2048;
     static_assert(kTxPrimeTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
                   "the trim threshold must sit below the overflow bound");
+    static_assert(kTxPrimeClientTargetSamples + kTxTrimMarginSamples < kTxQueueMax,
+                  "the client trim threshold must sit below the overflow bound");
     std::size_t m_txIqPrimeTarget = 0;          // 0 = not armed, drain normally
+    std::size_t m_txIqOverTarget = kTxPrimeTargetSamples;   // the target the prime let go at
     std::uint64_t m_txIqPrimeHeldPackets = 0;   // this hold, for the deadline
     std::uint64_t m_txPrimeHoldPackets = 0;     // process total
     std::uint64_t m_txPrimeDeadlineReleases = 0;
@@ -1145,6 +1184,8 @@ private:
     // rate exists: downstream sees a ~10 Hz emit of a bit cycling up to ~190 times/s.
     int m_adcWindowSamples = 0;
     int m_adcWindowOverload = 0;
+    quint64 m_psGeneration = 0;
+    quint64 m_psAdcWindowGeneration = 0;
     // Forward-power maximum for the same window; see
     // Hl2Telemetry::forwardPowerPeakRaw for why the last value is not enough.
     ForwardPowerWindow m_fwdWindow;
