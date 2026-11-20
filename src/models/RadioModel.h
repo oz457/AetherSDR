@@ -73,6 +73,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include "core/backends/SessionCommandGuard.h"
 
 #include <QTimer>
@@ -80,6 +81,7 @@
 
 namespace AetherSDR {
 class TxController;
+class SerialPortController;
 class WanConnection;
 class FlexStatusIngress;
 struct TxBandDelta;
@@ -393,6 +395,10 @@ public:
     // Non-inline: IRadioBackend is only forward-declared here.
     RadioCapabilities backendCapabilities() const;
 
+    // Start or stop backendSliceIqFrameReady for one slice; false when the
+    // backend has no raw IQ of its own (IRadioBackend::setSliceIqTap).
+    bool setBackendSliceIqTap(int sliceId, bool on);
+
     // The connected backend's health/status registers, for the Radio Health
     // dialog. Empty when no backend is connected or the family reports none —
     // which the dialog renders as "this radio reports no health registers"
@@ -502,7 +508,27 @@ public:
     // entry point (macros, MQTT, TCI, rigctl, SmartCAT KY, bridge) bypasses
     // MainWindow's gate and must ask here, returning an error when absent.
     // Says nothing about CW keying itself, which works without a text buffer.
+    // hasVoiceKeyer is also false for a session whose firmware refused the
+    // DVK API (DvkModel::unsupported(), #7156); a change emits
+    // licenseFeaturesChanged().
     bool hasRadioSideCwKeyer() const;
+    // Whether THIS HOST can key CW text on the connected radio: no radio-side
+    // buffer, but a transmit-capable backend that keys host-timed elements
+    // (hostCwKeyingControl engaged). False when disconnected, unlike hasRadioSideCwKeyer().
+    bool hasHostCwTextKeyer() const;
+    // Send-time preflight for host-keyed text, as pure reads with no interlock
+    // notice. Each element still passes the per-edge gates of a paddle.
+    // BreakInOffUnkeyed: break-in is off and this host holds no MOX/PTT
+    // (TransmitModel::isTransmitting()), so the backend would not raise MOX
+    // and the text would play to an unkeyed radio. Tuning: TUNE is active, and a
+    // CW key-down is refused while tuning (TransmitModel::admitsCwxSend()).
+    enum class HostCwTextRefusal { None, Unsupported, NoTxSlice, NotCwMode, ReceiveOnlyMode, Inhibited,
+                                   Tuning, BreakInOffUnkeyed };
+    HostCwTextRefusal hostCwTextRefusal() const;
+    // "Can this radio send CW text?": hasRadioSideCwKeyer() || hasHostCwTextKeyer(),
+    // so it keeps the permissive disconnected rule. The one check every text-CW
+    // surface asks once it can reach the host engine (#7146).
+    bool hasCwTextKeyer() const;
     bool hasCwTextProgress() const;
     bool hasCwTextStoredMacros() const;
     int cwTextMinWpm() const;
@@ -984,6 +1010,15 @@ public:
     // timer brings the link back when the radio finishes booting.
     bool rebootRadio(std::optional<RadioControlSession> expectedSession = {});
     bool isWan() const { return m_wanConn != nullptr; }
+    // WAN, routed or a radio at a tailnet address (RFC #6271 D4): the
+    // network thresholds, NTP, discovery release.
+    bool isRemoteSession() const;
+    // Whether this session's connection runs through Tailscale's interface,
+    // decided once at GUI-client registration (core/TailscaleInterface.h).
+    bool sessionOverTailscale() const { return m_sessionOverTailscale; }
+    // WAN, routed or sessionOverTailscale(): Radio Setup's IP Configuration
+    // gate. Never an address match, so a LAN in 100.64.0.0/10 stays local.
+    bool isRemoteForIpConfiguration() const;
 
     // Phase 2 of GHSA-wfx7-w6p8-4jr2 (#2951): forward the user's
     // cert-mismatch decision down to the active WAN connection. No-op
@@ -1000,7 +1035,20 @@ public:
     bool independentTxReady() const;
     bool transmitRecovering() const { return m_txCoordinator.recovering(); }
     bool transmitOwnershipPending() const { return m_txCoordinator.hasOwnership(); }
+    // Idle for a non-keying selection (DAX TX stream, TCI TX antenna): no TX
+    // ownership, or only a locally completed over still awaiting qualified
+    // stop evidence, with fresh settled RX seen since and nothing of it still
+    // on its way to the radio. Ownership itself is retained either way.
+    bool transmitIdleForSelection() const;
     void emergencyTransmitStop();
+    // A station condition outside the radio that objects to a key-on from this
+    // application: empty is no objection, anything else is the sentence shown
+    // to the operator. Asked on the main thread at every key-on gate, never for
+    // an un-key, and not while this client already transmits (VOX on is asked
+    // even then, since VOX stays armed after the over); the first
+    // non-empty answer refuses. It goes when `owner` is destroyed (#6237).
+    using KeyObjection = std::function<QString()>;
+    void addKeyObjection(QObject* owner, KeyObjection objection);
     // Trusted composition only. A producer is a lifetime, not an actor grant.
     TxCoordinator::Producer registerTxProducer(QObject* lifetime, bool continuousMicrophone = false);
     // Plain engine protocol objects invalidate this handle in their destructor.
@@ -1025,6 +1073,8 @@ public:
                              TransmitModel::PttSource source = TransmitModel::PttSource::Dax);
     bool requestProducerPttOn(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     void requestProducerPttOff(const TxCoordinator::Request& request, TransmitModel::PttSource source);
+    // Routes a serial footswitch's PTT input through the two calls above.
+    void connectSerialPttInput(SerialPortController* source);
     void abortProducerPtt(const TxCoordinator::Request& request, TransmitModel::PttSource source);
     bool requestProducerTune(const TxCoordinator::Request& request, bool on, bool twoTone = false);
     bool requestProducerAtu(const TxCoordinator::Request& request, bool start);
@@ -1038,9 +1088,15 @@ public:
                            const QString& debugSource = {}, quint64 debugTraceId = 0,
                            quint64 debugSourceMs = 0);
     bool producerRequestHasWork(const TxCoordinator::Request& request) const;
+    // Host CW text: hostTextGates refuses a key-down unless the TX slice is in
+    // a CW mode and, with break-in off, this host holds MOX/PTT; onDownRefused
+    // runs on the model thread when a key-down is not forwarded, so the text
+    // keyer can end the message. Paddles pass neither.
     void queueProducerCwKeyEdge(const TxCoordinator::Request& request, bool down,
                                 const QString& source, quint64 traceId, quint64 sourceMs,
-                                std::chrono::steady_clock::time_point scheduledAt);
+                                std::chrono::steady_clock::time_point scheduledAt,
+                                bool hostTextGates = false,
+                                std::function<void()> onDownRefused = {});
     bool txProducerHasWork(const TxCoordinator::Producer& producer) const;
     void abortTxProducerInputs(const TxCoordinator::Producer& producer,
                                TransmitModel::PttSource source);
@@ -1157,6 +1213,11 @@ public:
                                  QObject* replyContext = nullptr,
                                  const RadioSetupCompletion& completion = {});
     ReceiveDispatch requestUsbCable(const UsbCableRequest& request);
+    // Only to a known passthrough cable that is plugged in.
+    ReceiveDispatch requestUsbCableWrite(const QString& serial, const QByteArray& bytes);
+    // Asks the radio to resend every cable's status. It pushes one for a type
+    // change but not for a serial setting (measured on a FLEX-8600, 4.3.16).
+    ReceiveDispatch requestUsbCableStatus();
     ReceiveDispatch requestTransverter(const TransverterRequest& request,
                                       QObject* replyContext = nullptr,
                                       const RadioSetupCompletion& completion = {},
@@ -1424,6 +1485,8 @@ signals:
     // Only a backend that demodulates in this process emits it; Flex per-slice
     // audio arrives as DAX channels instead.
     void backendSliceAudioFrameReady(int sliceId, const AetherSDR::PcmFrame& pcm);
+    // ONE slice's raw IQ, relayed from IRadioBackend::sliceIqFrameReady.
+    void backendSliceIqFrameReady(int sliceId, const QByteArray& iqFloat32, int sampleRate);
 
     // Normalized demodulated-RX-audio bus: the audio the operator hears (24 kHz
     // stereo), whoever produced it. Exactly one producer is bound, chosen only
@@ -1987,6 +2050,8 @@ private:
                     bool expireReply = false);
     ReceiveDispatch requestSessionControl(const SessionControlRequest& request,
                                          const SessionControlCompletion& completion = {});
+    // `sub dvk all`, reading the radio's answer for a firmware with no DVK API.
+    void subscribeDvk();
     void requestStartupSetup(const RadioSetupRequest& request);
     void resetSessionControls();
     bool sessionTransportCurrent() const;
@@ -2298,6 +2363,9 @@ private:
     // Whether this session's path to the radio runs over Tailscale, decided
     // once at GUI-client registration on this thread (networkMtuParam).
     bool m_pathOverTailnet{false};
+    // Whether this session's local end sits on Tailscale's interface, decided
+    // at the same point; reset by every connect.
+    bool m_sessionOverTailscale{false};
     // Bumped at every session end. Captured by deferred work (the multiFLEX
     // peek window) so a timer armed in one session cannot fire into the next.
     quint64 m_sessionGeneration{0};
@@ -2448,7 +2516,8 @@ private:
     std::chrono::steady_clock::time_point m_cwInputNotBefore{};
     static qint64 txMonotonicMs();
     bool beginLocalTxActivity(TxActivity activity);
-    bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request);
+    bool beginTxActivity(TxActivity activity, const TxCoordinator::Request* request,
+                         bool askKeyObjection = true);
     TransmitModel::KeyingRoute producerKeyingRoute(const TxCoordinator::Request& request,
                                                   TxActivity activity, bool& dispatched);
     bool dispatchTuneIntent(bool on, const TxCoordinator::Request* request = nullptr);
@@ -2589,6 +2658,16 @@ private:
     bool        m_multiFlexEnabled{true};
     bool        m_txRequested{false}; // local MOX command intent (for edge sync)
     bool        m_cwKeyActive{false}; // true while CW key/paddle is held (#1379)
+    // One CW message, for the key objection: opened by a key-down admitted
+    // while none runs; ended by the radio reporting un-keyed after it reported
+    // keyed, or, with no keyed report, by the break-in delay after the last
+    // key-up. The radio's keyed state holds a message open only while TX is
+    // this client's (txOwnedByUs()). The objection is asked at its first
+    // element only.
+    bool        m_cwMessageOpen{false};
+    bool        m_cwMessageSawKeyed{false};
+    qint64      m_cwMessageLastUpMs{-1};
+    bool        cwMessageRunning();
     bool        m_cwxActive{false};   // true while CWX send is in flight (#2047, #2097)
     bool        m_cwPaddleHeld{false}; // true while a paddle is physically held (#5422)
     std::vector<TxCoordinator::Request> m_producerCwPaddleInputs;
@@ -2604,6 +2683,12 @@ private:
     // Last mox a RadioCapabilities::radioPttObservation backend published; ORed
     // into the command-edge fallback. Always false for every other backend.
     bool        m_backendObservedTransmit{false};
+    // The host key followRadioPtt() took for the radio's own PTT, released on the
+    // radio's falling edge. m_radioPttKeyed is false when the host was already
+    // keyed or the key was refused, so that path never releases another's key.
+    TxCoordinator::Producer m_radioPttProducer;
+    TxCoordinator::Request  m_radioPttInput;
+    bool                    m_radioPttKeyed{false};
     bool        m_operatorTransmitting{false}; // owned MOX/PTT/VOX (not tune/ATU/TCI/DAX)
     // TGXL autotune keys over the interlock line, so no PttSource tags it: arm a
     // short window on `tgxl autotune` and latch the cycle as a tune carrier.
@@ -2754,6 +2839,24 @@ private:
     void enforceTransmitInhibitForSlice(SliceModel* slice);
     void selectSoleValidTxAntennaIfNeeded(SliceModel* slice, bool txAntennaStatusReceived);
     bool transmitStartBlockedByInhibit(const QString& key);
+    struct KeyObjectionEntry {
+        QPointer<QObject> owner;
+        KeyObjection      objection;
+    };
+    std::vector<KeyObjectionEntry> m_keyObjections;
+    // The gate of an objection the PTT preflight just returned, so its
+    // pttBlocked notice is filed under key-objection:<pan>:<gate>.
+    QString m_keyObjectionPreflightGate;
+    // The first registered objection with something to say, trimmed; empty
+    // when none objects or while this client already transmits.
+    QString keyObjectionMessage() const;
+    // The same question without the "already transmitting" exemption, for a
+    // key-on that outlives the current over (VOX on).
+    QString firstKeyObjection() const;
+    // The refusal: the notice under key-objection:<pan>:<gate> and the pan
+    // inhibit's rollback.
+    bool transmitStartBlockedByKeyObjection(const QString& gate);
+    void emitKeyObjectionNotice(const QString& message, const QString& gate);
     void noteLocalTxSliceEnableIntent(int sliceId);
     void sendSliceCommand(SliceModel* slice, const QString& cmd);
     QString localPttInterlockMessage(TransmitModel::PttSource source) const;
@@ -2768,6 +2871,8 @@ private:
     // Raw-TX edge for backends with no interlock status plane (HL2). No-op on
     // Flex, where the edge is decoded from `interlock` status instead.
     void publishBackendTransmitEdge(bool tx);
+    // Key or release the host for a radioPttObservation backend's own PTT edge.
+    void followRadioPtt(bool down);
     // Command-edge fallback for a backend with no radio TX readback. One that
     // declares RadioCapabilities::hasRadioPttReadback (Icom) waits for the
     // decoded backend edge instead.
