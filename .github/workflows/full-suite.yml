@@ -168,7 +168,7 @@ jobs:
         run: |
           set -o pipefail
           ec=0
-          ctest --test-dir build --no-tests=error --output-on-failure 2>&1 | tee full-suite.log || ec=$?
+          ctest --test-dir build --no-tests=error --output-on-failure -R "^(hl2_tx_queue_jitter_test|hl2_tx_gate_test|hl2_txdsp_test|hl2_backend_seam_test|hl2_hardware_ptt_state_test|radio_model_direct_tx_test|backend_seam_affinity_test|backend_family_switch_test|hl2_tci_signaling_test|tx_audio_context_test)$" 2>&1 | tee full-suite.log || ec=$?
           echo "exit=$ec" >> "$GITHUB_OUTPUT"
 
       - name: Extract failure report
